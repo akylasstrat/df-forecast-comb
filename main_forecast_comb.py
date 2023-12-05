@@ -423,7 +423,7 @@ lambda_cc_dt = tune_combination_newsvendor(train_targetY, train_p_list, nn_model
 print(f'Decision rule solution:{lambda_cc_dt}')
 
 #%% Gradient-based approach with CVXPY/ full batch updates
-batch_size = 100
+batch_size = 50
 
 z = cp.Variable(batch_size)
 error = cp.Variable((batch_size, len(y_supp)))
@@ -449,7 +449,7 @@ Projection = True
 eta = 1e-2
 
 for i in range(10000):
-    
+
     ix = np.random.choice(range(nobs), batch_size, replace = False)
 
     # forward pass
@@ -489,7 +489,7 @@ for i in range(10000):
         plt.show()
         
 #%% Differential opt. layer
-batch_size = 10
+batch_size = 50
 nobs = len(train_targetY)
 k = len(y_supp)
 
@@ -512,14 +512,12 @@ constraints = [z >= 0, z <=1] + [error[i] == y_supp - z[i] for i in range(batch_
             + [p_comb == sum([p_list_t_aux[j]*lambda_[j] for j in range(N_experts)])]\
 #            + [point_pred == sum([lambda_[j]*p_list_t_aux[j] for j in range(N_experts)])@y_supp]
 
-
 #reg_pen = 10*cp.norm(cp.multiply(p_comb, error))
 #reg_pen = 10*cp.norm( point_pred )
 
-#objective = cp.Minimize( sum([pinball_loss[i]@p_comb[i] for i in range(batch_size)]) ) 
-objective = cp.Minimize( cp.norm(cp.multiply(p_comb, error)) ) 
+objective = cp.Minimize( sum([pinball_loss[i]@p_comb[i] for i in range(batch_size)]) ) 
+#objective = cp.Minimize( cp.norm(cp.multiply(p_comb, error)) ) 
 problem = cp.Problem(objective, constraints)
-
 layer = CvxpyLayer(problem, parameters=[lambda_, p_comb] + p_list_t, variables=[z, pinball_loss, error] + p_list_t_aux)
 #layer = CvxpyLayer(problem, parameters=[lambda_, p_comb] + p_list_t, variables=[z, error] + p_list_t_aux)
 l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
@@ -536,7 +534,7 @@ for i in range(10000):
     p_list_t_hat = []
 
     for j in range(N_experts):
-        p_list_t_hat.append( nn.Parameter( torch.FloatTensor([train_p_list[j][ix]]) ) ) 
+        p_list_t_hat.append( nn.Parameter( torch.FloatTensor(train_p_list[j][ix]) ) ) 
         
     p_comb_hat = (sum([p_list_t_hat[j]*l_hat[j] for j in range(N_experts)]))
     
