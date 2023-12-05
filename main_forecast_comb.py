@@ -489,7 +489,7 @@ for i in range(10000):
         plt.show()
         
 #%% Differential opt. layer
-batch_size = 1
+batch_size = 10
 nobs = len(train_targetY)
 k = len(y_supp)
 
@@ -551,7 +551,7 @@ for i in range(10000):
     #loss = (zhat - nn.Parameter(torch.FloatTensor(train_targetY))).norm()
 
     loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))\
-            + 100*error_hat.norm(p=2)
+#            + 100*error_hat.norm(p=2)
     
     losses.append(to_np(loss))
             
