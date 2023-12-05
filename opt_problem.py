@@ -10,7 +10,7 @@ import numpy as np
 import scipy.sparse as sp
 
 def opt_problem(Y, weights = None, prescribe = False,
-                prescriptive_train = False, problem = 'mse', crit_quant = 0.5, risk_aversion = 0.5, epsilon = 0.5):
+                prescriptive_train = False, problem = 'mse', crit_quant = 0.5, risk_aversion = 0.5, epsilon = 0.5, **kwargs):
     
     ''' SAA of newsvendor problem
         Y: pooled data and indicator on whether observation belongs to local data set
