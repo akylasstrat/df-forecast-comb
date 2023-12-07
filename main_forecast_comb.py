@@ -332,13 +332,21 @@ results_path = f'{cd}\\results'
 data_path = f'{cd}\\data'
 
 aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, header = [0,1])
-
+#%%
 
 #!!!! Add randomization based on the iteration counter here
-target_zone = config['target_zone']
-expert_zones = ['Z2', 'Z4', 'Z8', 'Z9']
-pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
+all_zones = [f'Z{i}' for i in range(1,11)]
 
+#target_zone = config['target_zone']
+#expert_zones = ['Z2', 'Z4', 'Z8', 'Z9']
+
+target_zone = np.random.choice(all_zones)
+expert_zones = all_zones.copy()
+expert_zones.remove(target_zone)
+expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
+
+pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
+#%%
 # number of forecasts to combine
 N_experts = config['N_experts']
 
@@ -411,7 +419,7 @@ for i, p in enumerate(expert_zones[:N_experts]):
     test_p_list.append(wemp_to_support(test_w_list[i], trainY[p].values, y_supp))
     
 #% Visualize some prob. forecasts
-
+#%%
 # step 1: find inverted CDFs
 F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j in range(N_experts)]
 
@@ -610,9 +618,11 @@ if problem == 'newsvendor':
     #problem = cp.Problem(objective, constraints)
     
     L_t = [(1/N_experts)*np.ones(N_experts)]
+    #L_t = [[.4, .4, .2]]
+    
     Loss = []
     Projection = True
-    eta = 1e-2
+    eta = 1e-3
     
     for i in range(10000):
     
@@ -655,7 +665,7 @@ if problem == 'newsvendor':
             plt.show()
         
 #%% Differential Opt. Layer/ Pytorch/ Full stochastic solution for inner problem
-    batch_size = 1
+    batch_size = 10
     nobs = len(train_targetY)
     k = len(y_supp)
 
@@ -689,7 +699,7 @@ if problem == 'newsvendor':
 
     opt = torch.optim.Adam([l_hat], lr=1e-2)
     losses = []
-    L_t = [to_np(l_hat)]
+    L_t = [to_np(l_hat).copy()]
     Projection = True
     
     for i in range(10000):
@@ -708,7 +718,7 @@ if problem == 'newsvendor':
         zhat = decisions_hat[0]
         #point_pred_hat = decisions_hat[1]
         
-        error_hat = zhat - nn.Parameter(torch.FloatTensor([train_targetY[ix]]))
+        error_hat = nn.Parameter(torch.FloatTensor([train_targetY[ix]])) - zhat
         #!!!!! add pinball loss here
         #loss = error_hat.norm(p = 1)
         #loss = (zhat - nn.Parameter(torch.FloatTensor(train_targetY))).norm()
@@ -730,7 +740,7 @@ if problem == 'newsvendor':
             with torch.no_grad():
                 l_hat.copy_(torch.FloatTensor(y_proj.value))
         
-        L_t.append(to_np(l_hat))
+        L_t.append(to_np(l_hat).copy())
     
         if i%50==0:
             print(L_t[-1])
@@ -739,7 +749,7 @@ if problem == 'newsvendor':
             plt.show()
             
 #%% Differential Opt. Layer/ Pytorch/ **Deterministic** solution for inner problem
-    batch_size = 500
+    batch_size = 200
     nobs = len(train_targetY)
     k = len(y_supp)
 
@@ -754,6 +764,8 @@ if problem == 'newsvendor':
     point_pred_aux = cp.Variable((batch_size, N_experts))
     
     comb_point_pred = cp.Variable(batch_size)
+    #target_t = cp.Parameter(batch_size)
+    
     #p_list_t = [cp.Parameter((batch_size,k)) for j in range(N_experts)]
     #p_list_t_aux = [cp.Variable((batch_size,k)) for j in range(N_experts)]
     
@@ -761,7 +773,8 @@ if problem == 'newsvendor':
                 + [pinball_loss >= critical_fractile*error]\
                 + [pinball_loss >= (critical_fractile-1)*error]\
                 + [point_pred_aux == point_pred_exp_t]\
-                + [comb_point_pred == point_pred_aux@lambda_]
+                + [comb_point_pred == point_pred_aux@lambda_]\
+                #+ [z == comb_point_pred]
                 #+ [p_list_t_aux[j] == p_list_t[j] for j in range(N_experts)]\
 
     objective = cp.Minimize( sum(pinball_loss) ) 
@@ -771,9 +784,9 @@ if problem == 'newsvendor':
     
     l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
 
-    opt = torch.optim.Adam([l_hat], lr=1e-2)
+    opt = torch.optim.Adam([l_hat], lr=1e-1)
     losses = []
-    L_t = [to_np(l_hat)]
+    L_t = [to_np(l_hat).copy()]
     Projection = True
     
     for i in range(10000):
@@ -787,21 +800,26 @@ if problem == 'newsvendor':
             temp_point_pred.append(train_p_list[j][ix]@y_supp)
 
         point_pred_exp_t_hat = nn.Parameter(torch.FloatTensor( np.array(temp_point_pred).T ))
-                
+        target_t_hat = nn.Parameter(torch.FloatTensor([train_targetY[ix]]))
+        
+        ### Forward pass: solve the problem        
         decisions_hat = layer(l_hat, point_pred_exp_t_hat)
         zhat = decisions_hat[0]
         #point_pred_hat = decisions_hat[1]
         
-        error_hat = zhat - nn.Parameter(torch.FloatTensor([train_targetY[ix]]))
+        error_hat = nn.Parameter(torch.FloatTensor([train_targetY[ix]])) - zhat
         
-        loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))
-        
+        ### Estimate regret on the master problem
+        loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))\
+#            + error_hat.norm(p=2)
         losses.append(to_np(loss))
-                
+        
+        ### Find gradients and update parameters                
         opt.zero_grad()
         loss.backward()
         opt.step()
         
+        ### Projection to probability simplex
         if Projection:     
             y_hat.value = to_np(l_hat)
             proj_problem.solve(solver = 'GUROBI')
@@ -810,15 +828,18 @@ if problem == 'newsvendor':
             with torch.no_grad():
                 l_hat.copy_(torch.FloatTensor(y_proj.value))
         
-        L_t.append(to_np(l_hat))
-    
+        L_t.append(to_np(l_hat).copy())
+        
         if i%50==0:
             print(L_t[-1])
             
-            plt.plot(losses)
+            plt.plot(L_t)
             plt.show()
-
-    #%% Barycentric interpolation
+    
+    # find best iteration
+    best_ind = np.where(np.array(losses) == min(losses))[0][0]
+    
+    #%% Barycentric interpolation: learn mapping from inverse c.d.f. to c.d.f. (stepwise function analytically)
     
     # Train additional ML predictor to learn mapping from quantile function to p.d.f. (the true is piecewise constant)
     target_quantiles = np.arange(0,1.01,.01)
@@ -855,7 +876,7 @@ if problem == 'newsvendor':
     #%%
     p_cc_lr = sum([lambda_cc_dict['LR'][i]*test_p_list[i] for i in range(N_experts)])
     p_cc_base = sum([lambda_cc_dict['DecComb'][i]*test_p_list[i] for i in range(N_experts)])
-    p_cc_dt = sum([L_t[-1][i]*test_p_list[i] for i in range(N_experts)])
+    p_cc_dt = sum([L_t[best_ind][i]*test_p_list[i] for i in range(N_experts)])
     p_brc_dt = np.zeros((n_test_obs, nlocations))
     
     # Adaptive convex combination
