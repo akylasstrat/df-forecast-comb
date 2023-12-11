@@ -16,7 +16,7 @@ References:
 import numpy as np
 from math import sqrt
 from GreedyPrescriptiveTree import GreedyPrescriptiveTree
-from opt_problem import *
+from det_opt_problem import *
 import time
 
 #from forecast_opt_problem import *

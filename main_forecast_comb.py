@@ -315,7 +315,7 @@ def params():
     params['N_experts'] = 3
     params['iterations'] = 5
     
-    params['critical_fractile'] = 0.4
+    params['critical_fractile'] = 0.6
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
@@ -697,7 +697,7 @@ if problem == 'newsvendor':
     
     l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
 
-    opt = torch.optim.Adam([l_hat], lr=1e-2)
+    opt = torch.optim.Adam([l_hat], lr=5e-1)
     losses = []
     L_t = [to_np(l_hat).copy()]
     Projection = True
@@ -749,7 +749,7 @@ if problem == 'newsvendor':
             plt.show()
             
 #%% Differential Opt. Layer/ Pytorch/ **Deterministic** solution for inner problem
-    batch_size = 200
+    batch_size = 500
     nobs = len(train_targetY)
     k = len(y_supp)
 
@@ -784,12 +784,12 @@ if problem == 'newsvendor':
     
     l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
 
-    opt = torch.optim.Adam([l_hat], lr=1e-1)
+    opt = torch.optim.Adam([l_hat], lr=5e-2)
     losses = []
     L_t = [to_np(l_hat).copy()]
     Projection = True
     
-    for i in range(10000):
+    for i in range(50000):
         
         ix = np.random.choice(range(nobs), batch_size, replace = False)
         
