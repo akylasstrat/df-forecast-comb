@@ -15,16 +15,15 @@ import gurobipy as gp
 
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from gurobi_ml import add_predictor_constr
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 from sklearn.tree import DecisionTreeRegressor
+
 from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
 
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 #project_dir=Path(cd).parent.__str__()   #project_directory
-plt.rcParams['figure.dpi'] = 600
 
-from sklearn.ensemble import ExtraTreesRegressor
 from EnsemblePrescriptiveTree import *
 from EnsemblePrescriptiveTree_OOB import *
 from optimization_functions import *
@@ -295,6 +294,234 @@ def tree_params():
     params['max_features'] = 1
     return params
 
+#def create_data_loader(X, Y, batch_size = 64, shuffle = True):
+#    dataset = torch.utils.data.TensorDataset(X,Y)
+#    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+from torch.utils.data import Dataset, DataLoader
+
+# Define a custom dataset
+class MyDataset(Dataset):
+    def __init__(self, *inputs):
+        self.inputs = inputs
+
+        # Check that all input tensors have the same length (number of samples)
+        self.length = len(inputs[0])
+        if not all(len(input_tensor) == self.length for input_tensor in inputs):
+            raise ValueError("Input tensors must have the same length.")
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        return tuple(input_tensor[idx] for input_tensor in self.inputs)
+
+# Define a custom data loader
+def create_data_loader(inputs, batch_size, num_workers=0, shuffle=True):
+    dataset = MyDataset(*inputs)
+    data_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=shuffle
+    )
+    return data_loader
+
+
+class ConvexCombinationLayer(nn.Module):
+    def __init__(self, num_inputs, support):
+        super(ConvexCombinationLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.support = support
+        
+    def forward(self, *inputs):
+        """
+        Forward pass of the convex combination layer.
+
+        Args:
+            *inputs: Variable number of input tensors.
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors.
+        """
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        #weights = torch.nn.functional.softmax(self.weights)
+        weights = self.weights
+
+        # Apply the weights element-wise to each input tensor
+        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_output = sum(weighted_inputs)
+        
+        prediction = combined_output@self.support
+        
+        return prediction
+
+class CombinationLayer(nn.Module):
+    def __init__(self, num_inputs):
+        super(CombinationLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        
+    def forward(self, *inputs):
+        """
+        Forward pass of the convex combination layer.
+
+        Args:
+            *inputs: Variable number of input tensors.
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors.
+        """
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        #weights = torch.nn.functional.softmax(self.weights)
+        weights = self.weights
+        # Apply the weights element-wise to each input tensor
+        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_output = sum(weighted_inputs)
+        
+        return combined_output
+    
+class NewsvendorLayer(nn.Module):        
+    def __init__(self, support, gamma, apply_softmax = False):
+        super(NewsvendorLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        #self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.support = support
+        self.gamma = gamma
+        self.apply_softmax = apply_softmax
+        
+        # newsvendor layer
+        z = cp.Variable((1))    
+        pinball_loss = cp.Variable(len(support))
+        error = cp.Variable(len(support))
+        w_error = cp.Variable(len(support))
+        prob_weights = cp.Parameter(len(support))
+        newsv_constraints = [z >= 0, z <= 1, error == y_supp - z,
+                             pinball_loss >= critical_fractile*(error), 
+                             pinball_loss >= (critical_fractile - 1)*(error), 
+                             w_error == cp.multiply(prob_weights, error)]
+
+        newsv_objective = cp.Minimize( prob_weights@pinball_loss + self.gamma*cp.norm(w_error)) 
+        newsv_problem = cp.Problem(newsv_objective, newsv_constraints)
+        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights], variables = [z, pinball_loss, error, w_error] )
+        
+    def forward(self, x):
+        """
+        Forward pass of the newvendor layer.
+
+        Args:
+            x: Probability vector.
+
+        Returns:
+            solves newsvendor problem, returns all variables of cvxpy layer.
+        """
+
+        # Pass the combined output to the CVXPY layer
+        cvxpy_output = self.newsvendor_layer(x)
+        return cvxpy_output
+
+class CustomSequentialLayer(nn.Module):
+    def __init__(self, num_probs, prob_size, cvxpy_params):
+        super(CustomSequentialLayer, self).__init__()
+
+        # Define the parameters for the first layer (learnable weights)
+        self.weights = nn.Parameter(torch.rand(num_probs), requires_grad=True)
+
+        # Define the second layer as a CVXPY layer
+        self.cvxpy_layer = CvxpyLayer(
+            cp.Problem(**cvxpy_params),  # Define the CVXPY problem
+            parameters=[],
+            variables=[],
+            modules=[]  # No additional modules needed for the CVXPY layer
+        )
+
+    def forward(self, input_probs):
+        """
+        Forward pass of the custom sequential layer.
+
+        Args:
+            input_probs (list of torch.Tensor): List of input probability vectors.
+
+        Returns:
+            torch.Tensor: Output of the sequential layer after both layers.
+        """
+        # Apply the sigmoid activation to the learned weights
+        weights = torch.sigmoid(self.weights)
+
+        # Element-wise weighted sum of input probability vectors
+        combined_output = sum(weights[i] * input_probs[i] for i in range(len(input_probs)))
+
+        # Pass the combined output to the CVXPY layer
+        cvxpy_output = self.cvxpy_layer([combined_output])
+
+        return cvxpy_output
+    
+class CombNewsvendorLayer(nn.Module):        
+    def __init__(self, num_inputs, support, gamma, apply_softmax = False):
+        super(CombNewsvendorLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.support = support
+        self.gamma = gamma
+        self.apply_softmax = apply_softmax
+        
+        # newsvendor layer
+        z = cp.Variable((1))    
+        pinball_loss = cp.Variable(len(support))
+        error = cp.Variable(len(support))
+        w_error = cp.Variable(len(support))
+        prob_weights = cp.Parameter(len(support))
+        newsv_constraints = [z >= 0, z <= 1, error == y_supp - z,
+                             pinball_loss >= critical_fractile*(error), 
+                             pinball_loss >= (critical_fractile - 1)*(error), 
+                             w_error == cp.multiply(prob_weights, error)]
+
+        newsv_objective = cp.Minimize( prob_weights@pinball_loss + self.gamma*cp.norm(w_error)) 
+        newsv_problem = cp.Problem(newsv_objective, newsv_constraints)
+        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights], variables = [z, pinball_loss, error, w_error] )
+        
+    def forward(self, *inputs):
+        """
+        Forward pass of the newvendor layer.
+
+        Args:
+            *inputs: Variable number of input tensors.
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors.
+        """
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        #weights = torch.nn.functional.softmax(self.weights)
+
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        if self.apply_softmax:
+            weights = torch.nn.functional.softmax(self.weights)
+        else:
+            weights = self.weights
+
+        # Apply the weights element-wise to each input tensor
+        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_vector = sum(weighted_inputs)
+
+        # Pass the combined output to the CVXPY layer
+        cvxpy_output = self.newsvendor_layer(combined_vector)
+        return cvxpy_output
+    
 def params():
     ''' Set up the experiment parameters'''
 
@@ -323,7 +550,7 @@ def params():
     params['decision_rules'] = ['LR', 'DecComb'] 
 
     return params
-
+    
 #%%
 config = params()
 hyperparam = tree_params()
@@ -432,7 +659,7 @@ plt.show()
 
 #%% Example: point forecasting (MSE) & convex combination
 
-problem = 'newsvendor'
+target_problem = 'mse'
 critical_fractile = config['critical_fractile']
 
 # projection step (used for gradient-based methods)
@@ -442,8 +669,15 @@ proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj
 
 train_targetY = comb_trainY[target_zone].values.reshape(-1)
 
+# Supervised learning set for torch
+tensor_trainY = torch.FloatTensor(train_targetY)
+tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
+tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(N_experts)]
 
-if problem == 'mse':
+train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
+
+
+if target_problem == 'mse':
     
     #### Solve to optimality with a single level problem
     # 1-1 mapping: decisions are the weighted sum
@@ -471,8 +705,118 @@ if problem == 'mse':
 
     #### Solve with Diff. Opt. Layer (should converge to the same solution as above)
     k = len(y_supp)
+    print(np.linalg.norm((train_targetY-z.X)))
     
-    # GD for differentiable layer
+    #%%
+    ################## Pytorch example    
+    patience = 25
+    batch_size = 100
+    num_epochs = 100
+    
+    train_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+    convex_layer = ConvexCombinationLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
+    
+    
+    # Forward pass through the layer with 3 inputs
+    optimizer = torch.optim.SGD(convex_layer.parameters(), lr=1e-3)
+    Projection = True
+    L_t = []
+    for epoch in range(num_epochs):
+        # activate train functionality
+        convex_layer.train()
+        running_loss = 0.0
+        # sample batch
+        for batch_data in train_loader:
+            
+            y_batch = batch_data[-1]
+            
+            # clear gradients
+            optimizer.zero_grad()
+            # forward pass
+            z_hat = convex_layer(batch_data[0], batch_data[1], batch_data[2])
+            
+            # loss evaluation
+            loss = (z_hat - y_batch).norm()
+            
+            # backward pass
+            loss.backward()
+            optimizer.step()
+            
+        # Projection step (!!!! enforce no gradient update)
+        #with torch.no_grad():
+        #    convex_layer.weights.copy_ = nn.Softmax(dim=-1)(convex_layer.weights)
+            
+        if Projection:     
+            y_hat.value = to_np(convex_layer.weights)
+            proj_problem.solve(solver = 'GUROBI')
+            # update parameter values
+            with torch.no_grad():
+                convex_layer.weights.copy_(torch.FloatTensor(y_proj.value))
+                    
+            running_loss += loss.item()
+        
+
+        L_t.append(to_np(convex_layer.weights).copy())
+        
+        if epoch % 15 ==0:
+            plt.plot(L_t)
+            plt.show()
+        average_train_loss = running_loss / len(train_loader)
+        
+        with torch.no_grad():            
+            y_prediction = convex_layer(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2])
+
+        
+        print( ( tensor_trainY - y_prediction ).norm() )
+        
+        print(f"Epoch [{epoch + 1}/{num_epochs}] - Train Loss: {average_train_loss:.4f} ")
+    
+    #%%
+    z = cp.Variable(1)
+    lambda_ = cp.Parameter(N_experts)
+    x_i = cp.Parameter((1, tensor_train_p_list.shape[1]))
+    x_i_aux = cp.Variable((1, tensor_train_p_list.shape[1]))
+    
+    constraints = [z >= 0, z <=1, z == sum([lambda_[i]*x_i_aux[:,i*k:(i+1)*k] for i in range(N_experts)])@y_supp, 
+                   x_i == x_i_aux]
+    
+    # analytical solution
+    objective = cp.Minimize(0)
+    problem = cp.Problem(objective, constraints)
+    
+    Comb_Layer = CvxpyLayer(problem, parameters=[lambda_, x_i], variables=[z, x_i_aux])
+    
+    l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
+
+    optimizer = torch.optim.Adam([l_hat], lr=1e-3)
+
+    for epoch in range(num_epochs):
+        # activate train functionality
+        Comb_Layer.train()
+        running_loss = 0.0
+        # sample batch
+        for inputs, labels in train_loader:
+            
+            # clear gradients
+            optimizer.zero_grad()
+            # forward pass
+            outputs = Comb_Layer(l_hat, inputs)
+            z_hat = outputs[0]
+            
+            # loss evaluation
+            loss = (labels-z_hat).norm()
+
+            # backward pass
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+
+        
+    #%%
+    ################## GD for differentiable layer
+    # As currently written, does full batch gradient updates/ probably eats a lot of memory
+    
     z = cp.Variable(n_obs)
     lambda_ = cp.Parameter(N_experts)
     constraints = [z >= 0, z <=1, z == sum([lambda_[i]*train_p_list[i] for i in range(N_experts)])@y_supp]
@@ -482,13 +826,14 @@ if problem == 'mse':
     
     layer = CvxpyLayer(problem, parameters=[lambda_], variables=[z,])
     l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
-    opt = torch.optim.SGD([l_hat], lr=1e-2)
+    opt = torch.optim.SGD([l_hat], lr=1e-3)
     losses = []
     
     L_t = [to_np(l_hat)]
-    Projection = True
+    Projection = False
     
-    for i in range(1000):
+    layer.train()
+    for i in range(num_epochs):
             
         # Forward pass: solve optimization problem
         zhat, = layer(l_hat)
@@ -507,6 +852,7 @@ if problem == 'mse':
         loss.backward()
         opt.step()
           
+        
         if Projection:     
             y_hat.value = to_np(l_hat)
             proj_problem.solve(solver = 'GUROBI')
@@ -535,7 +881,7 @@ if problem == 'mse':
 
 #%%%%%%%%%%%%%%% Newsvendor experiment
 
-if problem == 'newsvendor':
+if target_problem == 'newsvendor':
     ### Train decision rules to mapping probability vectors to decisions
     
     # optimal solutions to create training set for decision rule
@@ -560,7 +906,7 @@ if problem == 'newsvendor':
     
     # benchmark rule (see Juanmi's suggestion)
     z0_opt = y_supp
-    #%%
+
     # visualize decision rules
     t = -200
     plt.plot(z_opt[t:], label = 'z_opt')
@@ -595,6 +941,96 @@ if problem == 'newsvendor':
     # Adaptive decision rules
     coef_, inter_ = adapt_combination_newsvendor(train_targetY, comd_trainX_local.values, train_p_list, lr_model, 
                                                crit_fract = critical_fractile, support = y_supp, bounds = False)
+
+#%% PyTorch example
+    
+    gamma = 0.1
+    
+    patience = 25
+    batch_size = 100
+    num_epochs = 25
+    
+    train_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+
+    combination_layer = CombinationLayer(num_inputs=N_experts)
+    
+    # newsvendor layer
+    z = cp.Variable((1))    
+    pinball_loss = cp.Variable(len(y_supp))
+    
+    prob_weights = cp.Parameter(len(y_supp))
+    
+    newsv_constraints = [z >= 0, z <= 1, 
+                         pinball_loss >= critical_fractile*(y_supp-z), 
+                         pinball_loss >= (critical_fractile - 1)*(y_supp-z)]
+
+    newsv_objective = cp.Minimize( prob_weights@pinball_loss ) 
+    newsv_problem = cp.Problem(newsv_objective, newsv_constraints)
+    newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights], variables = [z, pinball_loss] )
+
+
+    # Forward pass through the layer with 3 inputs
+    #Newsvendor_Comb_Model = nn.Sequential(CombinationLayer(num_inputs=N_experts), 
+    #                                      NewsvendorLayer(support = y_supp, gamma = gamma))
+    
+    Newsvendor_Comb_Model = CombNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, 
+                                                apply_softmax = False)
+    
+    optimizer = torch.optim.SGD(Newsvendor_Comb_Model.parameters(), lr = 1e-3)
+    Projection = True
+
+    L_t = []
+    for epoch in range(num_epochs):
+        # activate train functionality
+        Newsvendor_Comb_Model.train()
+        running_loss = 0.0
+        # sample batch
+        for batch_data in train_loader:
+            
+            y_batch = batch_data[-1]
+            
+            # clear gradients
+            optimizer.zero_grad()
+            
+            # forward pass: combine forecasts and solve each newsvendor problem
+            z_hat = Newsvendor_Comb_Model(batch_data[0], batch_data[1], batch_data[2])[0]
+            
+            error_hat = (y_batch.reshape(-1,1) - z_hat)
+            loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) \
+                    + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))\
+                    + gamma*error_hat.norm()
+
+            # backward pass
+            loss.backward()
+            optimizer.step()
+                        
+        # Projection step (!!!! enforce no gradient update)
+            #with torch.no_grad():
+            #    Newsvendor_Comb_Model.weights.copy_ = torch.nn.functional.softmax(Newsvendor_Comb_Model.weights)
+            
+            
+            if Projection:     
+                y_hat.value = to_np(Newsvendor_Comb_Model.weights)
+                proj_problem.solve(solver = 'GUROBI')
+                # update parameter values
+                with torch.no_grad():
+                    Newsvendor_Comb_Model.weights.copy_(torch.FloatTensor(y_proj.value))
+            
+            running_loss += loss.item()
+        
+
+        L_t.append(to_np(Newsvendor_Comb_Model.weights).copy())
+        
+        if epoch % 15 ==0:
+            plt.plot(L_t)
+            plt.show()
+        average_train_loss = running_loss / len(train_loader)
+        
+        with torch.no_grad():            
+            y_prediction = convex_layer(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2])
+
+        print(f"Epoch [{epoch + 1}/{num_epochs}] - Train Loss: {average_train_loss:.4f} ")
+
 
 #%% Gradient-based approach with CVXPY/ full batch updates
     batch_size = 50

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 #Import Libraries
 import numpy as np
-from det_opt_problem import *
+from opt_problem import *
 
 #from decision_solver import *
 from math import sqrt
