@@ -123,6 +123,51 @@ def w_barycenter_LP(emp_locs, loc_prob, w_coordinates = [], support = np.arange(
         return a_wass.X
 
 
+def optimal_barycenter_weights(expert_probs, empirical_data, support_locations, p = 1, prob_dx = .01):
+    ''' Find the optimal weights (barycentric coordinates) to aggregate a number of experts (prob. forecasts)
+        Args
+            - expert_probs: the historical probabilistic forecasts, list of numpys
+            - observed_probs: empirical probability of each location, true data
+            - support_locations: for simplicity, we consider the discrete case
+            - p: p-Wasserstein metric
+            - prob_dx: step to approximate the quantile function'''
+
+    n_obs = len(empirical_data)
+    target_quantiles = np.arange(0, 1+prob_dx, prob_dx)
+    n_experts = len(expert_probs)
+    
+    ### turn PDFs to quantile functions
+    emprical_q_funct = inverted_cdf(target_quantiles, empirical_data)
+    
+    # for each expert, turn historical predictions to quantile functions
+    Q_hat = []
+    for s in range(n_experts):
+        q_hat = []
+        for i in range(n_obs):
+            temp_q_hat = inverted_cdf(target_quantiles, support_locations, w = expert_probs[s][i])
+            q_hat.append(temp_q_hat)
+        q_hat = np.array(q_hat)
+        Q_hat.append(q_hat)
+
+    ### Find weights lambda that minimize the wasserstein distance in the training set from the emprical inverse c.d.f.
+    
+    m = gp.Model()
+    m.setParam('OutputFlag', 1)
+    
+    lambda_ = m.addMVar((n_experts), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'barycentric coordinates')    
+    Q_barycenter = m.addMVar( (n_obs, len(target_quantiles)), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'barycenter')    
+    wass_dist_sq_i = m.addMVar( n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'barycenter')    
+
+    m.addConstr( lambda_.sum() == 1)
+    
+    m.addConstrs( Q_barycenter[i,:] == sum([lambda_[j]*Q_hat[j][i] for j in range(n_experts)]) for i in range(n_obs) )
+    m.addConstrs( wass_dist_sq_i[i] >=  (Q_barycenter - emprical_q_funct)@(Q_barycenter - emprical_q_funct))
+    
+    m.setObjective( sum(wass_dist_sq_i) )
+    m.optimize()
+    
+    return lambda_.X
+
 def wass_distance_LP(x1,x2, w1=[], w2=[], p = 1):
     ''' p-Wasserstein distance between x1, x2. Exact solution with Gurobi. 
         Returns the distance and the transportation plan.'''
