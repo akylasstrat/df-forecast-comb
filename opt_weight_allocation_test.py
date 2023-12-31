@@ -322,8 +322,15 @@ aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col =
 target_problem = config['problem']
 row_counter = 0
 
-for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
+#%%
+tuple_list = [tup for tup in itertools.product(config['critical_fractile'], range(config['iterations']))]
+    
+#for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
 
+for tup in tuple_list[row_counter:]:
+    critical_fractile = tup[0]
+    iter_ = tup[1]
+    
     all_zones = [f'Z{i}' for i in range(1,11)]
     np.random.seed(row_counter)
     
@@ -337,7 +344,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
     
     pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
-    #%%
+
     # number of forecasts to combine
     N_experts = config['N_experts']
     
@@ -348,7 +355,6 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     y_supp = np.arange(0, 1+step, step).round(2)
     nlocations = len(y_supp)
     
-    #%%
     ### Create train/test sets for all series
     
     trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
@@ -380,7 +386,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     n_obs = len(comb_trainY)
     n_test_obs = len(testY)
     
-    #%% Train experts, i.e., probabilistic forecasting models in adjacent locations
+    #% Train experts, i.e., probabilistic forecasting models in adjacent locations
     
     # data conditioned on wind speed
     
@@ -396,7 +402,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         temp_model.fit(trainX_exp[zone][pred_col].values, trainY[zone].values, quant = np.arange(.01, 1, .01), problem = 'mse') 
         prob_models.append(temp_model)
     
-    #%% Generate predictions for train/test set for forecast combination
+    #% Generate predictions for train/test set for forecast combination
     # find local weights for meta-training set/ map weights to support locations
     print('Generating prob. forecasts for train/test set...')
     
@@ -429,7 +435,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
     
-#%%%%%%%%%%%%%%% Newsvendor experiment
+# Newsvendor experiment
 
     if target_problem == 'newsvendor':
 
@@ -437,13 +443,13 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         
         # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
         lambda_bench = averaging_decisions(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
-        #%%
+        
         lambda_tuned = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
         
         print(f'Lambda SBench:{lambda_bench}')
         print(f'Lambda insample tune:{lambda_tuned}')
             
-        #%% Testing all methods
+        #% Testing all methods
         
         
         ##### Static Forecast Combinations
