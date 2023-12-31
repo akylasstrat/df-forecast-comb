@@ -122,8 +122,7 @@ def w_barycenter_LP(emp_locs, loc_prob, w_coordinates = [], support = np.arange(
     else:
         return a_wass.X
 
-
-def optimal_barycenter_weights(expert_probs, empirical_data, support_locations, p = 1, prob_dx = .01):
+def optimal_barycenter_weights(expert_probs, empirical_data, support_locations, p = 2, prob_dx = .01):
     ''' Find the optimal weights (barycentric coordinates) to aggregate a number of experts (prob. forecasts)
         Args
             - expert_probs: the historical probabilistic forecasts, list of numpys
@@ -148,7 +147,8 @@ def optimal_barycenter_weights(expert_probs, empirical_data, support_locations, 
             q_hat.append(temp_q_hat)
         q_hat = np.array(q_hat)
         Q_hat.append(q_hat)
-
+    
+    
     ### Find weights lambda that minimize the wasserstein distance in the training set from the emprical inverse c.d.f.
     
     m = gp.Model()
@@ -161,7 +161,7 @@ def optimal_barycenter_weights(expert_probs, empirical_data, support_locations, 
     m.addConstr( lambda_.sum() == 1)
     
     m.addConstrs( Q_barycenter[i,:] == sum([lambda_[j]*Q_hat[j][i] for j in range(n_experts)]) for i in range(n_obs) )
-    m.addConstrs( wass_dist_sq_i[i] >=  (Q_barycenter - emprical_q_funct)@(Q_barycenter - emprical_q_funct))
+    m.addConstrs( wass_dist_sq_i[i] >=  (Q_barycenter[i] - emprical_q_funct)@(Q_barycenter[i] - emprical_q_funct) for i in range(n_obs))
     
     m.setObjective( sum(wass_dist_sq_i) )
     m.optimize()
