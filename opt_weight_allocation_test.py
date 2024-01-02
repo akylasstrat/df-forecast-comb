@@ -52,10 +52,51 @@ plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
+def optimal_weights_CRPS(target_y, expert_probs, support = np.arange(0, 1.01, .01).round(2), 
+                         quant_grid = np.arange(0.01, 1, 0.01)):
+    ''' Find optimal weights for combination by minimizing approximate CRPS over a grid of quantiles
+        The approximation follows from Gneiting & Ranjan, 2011. See also CRPS Learning, Berrisch, Ziel.
+        '''
+        
+    n_obs = len(target_y)
+    n_experts = len(expert_probs)
+
+    ### turn PDFs to quantile functions, for each expert    
+    Q_hat = []
+    for s in range(n_experts):
+        q_hat = []
+        for i in range(n_obs):
+            temp_q_hat = inverted_cdf(quant_grid, support, w = expert_probs[s][i])
+            q_hat.append(temp_q_hat)
+        q_hat = np.array(q_hat)
+        Q_hat.append(q_hat)
+        
+    ### Find weights lambda that minimize the CRPS (approximated by quantile loss) in the training set 
+    
+    m = gp.Model()
+    m.setParam('OutputFlag', 1)
+    
+    lambda_ = m.addMVar((n_experts), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'barycentric coordinates')    
+    Q_comb = m.addMVar( (n_obs, len(quant_grid)), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'combined quant function')    
+    pinball_loss_i = m.addMVar( (n_obs, len(quant_grid)), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'pinball loss')    
+
+    m.addConstr( lambda_.sum() == 1)
+
+    m.addConstrs( Q_comb[i,:] == sum([lambda_[j]*Q_hat[j][i] for j in range(n_experts)]) for i in range(n_obs))
+    
+    for j, tau in enumerate(quant_grid):
+        m.addConstr( pinball_loss_i[:,j] >=  tau*(target_y - Q_comb[:,j]) )
+        m.addConstr( pinball_loss_i[:,j] >=  (tau-1)*(target_y - Q_comb[:,j]) )
+                          
+    m.setObjective( sum(sum(pinball_loss_i)) )
+    m.optimize()
+    
+    return lambda_.X
+
 def insample_weight_tuning(target_y, prob_vectors, brc_predictor = [], type_ = 'convex_comb', 
                                 crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
-    ''' FOr each observation and expert, solve the stochastic problem, find expected in-sample decision cost, 
-        set weights based on inverse cost (could use softmax activation)'''
+    ''' For each observation and expert, solve the stochastic problem, find expected in-sample decision cost, 
+        set weights based on inverse cost (or could use softmax activation)'''
 
     n_obs = prob_vectors[0].shape[0]
     n_models = len(prob_vectors)
@@ -77,8 +118,10 @@ def insample_weight_tuning(target_y, prob_vectors, brc_predictor = [], type_ = '
         insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
         insample_inverse_cost[j] = 1/insample_cost[j]
 
-    lambdas = insample_inverse_cost/insample_inverse_cost.sum()
-    return lambdas
+    lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
+    lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
+
+    return lambdas_inv, lambdas_softmax
 
 def averaging_decisions(target_y, prob_vectors, brc_predictor = [], type_ = 'convex_comb', 
                                 crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
@@ -322,7 +365,6 @@ aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col =
 target_problem = config['problem']
 row_counter = 0
 
-#%%
 tuple_list = [tup for tup in itertools.product(config['critical_fractile'], range(config['iterations']))]
     
 #for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
@@ -434,7 +476,7 @@ for tup in tuple_list[row_counter:]:
     
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
-    
+    #%%
 # Newsvendor experiment
 
     if target_problem == 'newsvendor':
@@ -442,13 +484,18 @@ for tup in tuple_list[row_counter:]:
         lambda_cc_dict = {}
         
         # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
-        lambda_bench = averaging_decisions(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
-        
-        lambda_tuned = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
-        
-        print(f'Lambda SBench:{lambda_bench}')
-        print(f'Lambda insample tune:{lambda_tuned}')
-            
+        #lambda_bench = averaging_decisions(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
+        #lambda_tuned_inv, lambda_tuned_softmax = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
+
+        lambda_crps_tuned = optimal_weights_CRPS(train_targetY, train_p_list, support = y_supp)
+        #lambda_brc_opt = optimal_barycenter_weights(train_p_list, train_targetY, y_supp)
+
+        #print(f'Lambda SBench:{lambda_bench}')
+        #print(f'Lambda insample tune inv:{lambda_tuned_inv}')
+        #print(f'Lambda insample tune softmax:{lambda_tuned_softmax}')
+
+        print(f'Lambda crps:{lambda_crps_tuned}')
+
         #% Testing all methods
         
         
@@ -457,35 +504,39 @@ for tup in tuple_list[row_counter:]:
         # turn weights to distributions, find average distribution
         p_ave = sum(test_p_list)/N_experts
         p_brc = np.zeros((n_test_obs, nlocations))
-        p_brc_opt = np.zeros((n_test_obs, nlocations))
-        p_cc_tune = sum([lambda_tuned[i]*test_p_list[i] for i in range(N_experts)])
+        #p_cc_tune = sum([lambda_tuned_inv[i]*test_p_list[i] for i in range(N_experts)])
+        
+        p_cc_crps = sum([lambda_crps_tuned[i]*test_p_list[i] for i in range(N_experts)])
+        p_brc_crps = np.zeros((n_test_obs, nlocations))
 
-        '''
+
+        
         # Barycenter with average & optimal coordinates
         for i in range(n_test_obs):
             temp_p_list = [p[i] for p in test_p_list]
 
             # Barycenter with uniform weights
-            temp_p_brc, _, _ = wass2_barycenter_1D(N_experts*[y_supp], temp_p_list, lambda_coord = N_experts*[1/N_experts], support = y_supp, p = 2, 
-                                       prob_dx = .01)
-            p_brc[i] = temp_p_brc
+            #temp_p_brc, _, _ = wass2_barycenter_1D(N_experts*[y_supp], temp_p_list, lambda_coord = N_experts*[1/N_experts], support = y_supp, p = 2, 
+            #                           prob_dx = .01)
+            #p_brc[i] = temp_p_brc
         
             # Barycenter with optimal weights (Papayanis, Yannacopoulos)
-            temp_p_brc, _, _ = wass2_barycenter_1D(N_experts*[y_supp], temp_p_list, lambda_coord = lambda_brc_opt, support = y_supp, p = 2, 
+            temp_p_brc, _, _ = wass2_barycenter_1D(N_experts*[y_supp], temp_p_list, lambda_coord = lambda_crps_tuned, support = y_supp, p = 2, 
                                        prob_dx = .01)
-            p_brc_opt[i] = temp_p_brc
-        '''
+            p_brc_crps[i] = temp_p_brc
+        
         
         # turn probability vectors to decisions/ closed-form solution for newsvendor problem    
-        models = [f'Model-{i}' for i in range(N_experts)] + ['CC-Ave', 'CC-Tune']
+        models = [f'Model-{i}' for i in range(N_experts)] + ['CC-Ave', 'CC-CRPS', 'BRC-CRPS']
         
         Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(models))), columns = models)
         for i in range(N_experts):
             Prescriptions[f'Model-{i}'] = np.array([inverted_cdf([critical_fractile], y_supp, test_p_list[i][k]) for k in range(n_test_obs)]).reshape(-1)
         
         Prescriptions['CC-Ave'] = np.array([inverted_cdf([critical_fractile], y_supp, p_ave[i]) for i in range(n_test_obs)]).reshape(-1)
-        Prescriptions['CC-Tune'] = np.array([inverted_cdf([critical_fractile], y_supp, p_cc_tune[i]) for i in range(n_test_obs)]).reshape(-1)
-        
+        Prescriptions['CC-CRPS'] = np.array([inverted_cdf([critical_fractile], y_supp, p_cc_crps[i]) for i in range(n_test_obs)]).reshape(-1)
+        Prescriptions['BRC-CRPS'] = np.array([inverted_cdf([critical_fractile], y_supp, p_brc_crps[i]) for i in range(n_test_obs)]).reshape(-1)
+
         temp_output = pd.DataFrame()
         temp_output['Quantile'] = [critical_fractile]
         temp_output['Iteration'] = iter_
@@ -499,5 +550,5 @@ for tup in tuple_list[row_counter:]:
             Output = temp_output.copy()
         else:
             Output = pd.concat([Output, temp_output])        
-        Output.to_csv(f'{cd}\\results\\tuned_weight_allocation_tests.csv')
+        Output.to_csv(f'{cd}\\results\\CRPS_tuned_weight_allocation_tests.csv')
         row_counter += 1

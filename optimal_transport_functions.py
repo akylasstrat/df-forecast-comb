@@ -123,7 +123,9 @@ def w_barycenter_LP(emp_locs, loc_prob, w_coordinates = [], support = np.arange(
         return a_wass.X
 
 def optimal_barycenter_weights(expert_probs, empirical_data, support_locations, p = 2, prob_dx = .01):
-    ''' Find the optimal weights (barycentric coordinates) to aggregate a number of experts (prob. forecasts)
+    ''' Find the optimal weights (barycentric coordinates) to aggregate a number of experts (prob. forecasts) minimizing the Wasserstein distance
+        Ref: Papayiannis, G.I. and Yannacopoulos, A.N., 2018. A learning algorithm for source aggregation. Mathematical Methods in the Applied Sciences, 41(3), pp.1033-1039.
+        
         Args
             - expert_probs: the historical probabilistic forecasts, list of numpys
             - observed_probs: empirical probability of each location, true data
