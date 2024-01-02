@@ -836,7 +836,14 @@ aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col =
 target_problem = config['problem']
 row_counter = 0
 
-for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
+tuple_list = [tup for tup in itertools.product(config['critical_fractile'], range(config['iterations']))]
+
+#for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
+    
+for tup in tuple_list[row_counter:]:
+    critical_fractile = tup[0]
+    iter_ = tup[1]
+
 
     all_zones = [f'Z{i}' for i in range(1,11)]
     np.random.seed(row_counter)
@@ -851,7 +858,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
     
     pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
-    #%%
+    #%
     # number of forecasts to combine
     N_experts = config['N_experts']
     
@@ -862,7 +869,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     y_supp = np.arange(0, 1+step, step).round(2)
     nlocations = len(y_supp)
     
-    #%%
+    #%
     ### Create train/test sets for all series
     
     trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
@@ -894,7 +901,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     n_obs = len(comb_trainY)
     n_test_obs = len(testY)
     
-    #%% Train experts, i.e., probabilistic forecasting models in adjacent locations
+    #% Train experts, i.e., probabilistic forecasting models in adjacent locations
     
     # data conditioned on wind speed
     
@@ -910,7 +917,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         temp_model.fit(trainX_exp[zone][pred_col].values, trainY[zone].values, quant = np.arange(.01, 1, .01), problem = 'mse') 
         prob_models.append(temp_model)
     
-    #%% Generate predictions for train/test set for forecast combination
+    #% Generate predictions for train/test set for forecast combination
     # find local weights for meta-training set/ map weights to support locations
     print('Generating prob. forecasts for train/test set...')
     
@@ -927,7 +934,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         test_p_list.append(wemp_to_support(test_w_list[i], trainY[p].values, y_supp))
         
     #% Visualize some prob. forecasts
-    #%%
+    #%
     # step 1: find inverted CDFs
     F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j in range(N_experts)]
     
@@ -938,7 +945,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3)
     plt.show()
     
-    #%% Example: point forecasting (MSE) & convex combination
+    #% Example: point forecasting (MSE) & convex combination
          
     # projection step (used for gradient-based methods)
     y_proj = cp.Variable(N_experts)
@@ -993,7 +1000,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         k = len(y_supp)
         print(np.linalg.norm((train_targetY-z.X)))
         
-        #%%
+        #%
         ################## Pytorch example    
         patience = 25
         batch_size = 100
@@ -1057,7 +1064,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
             
             print(f"Epoch [{epoch + 1}/{num_epochs}] - Train Loss: {average_train_loss:.4f} ")
         
-        #%%
+        #%
         z = cp.Variable(1)
         lambda_ = cp.Parameter(N_experts)
         x_i = cp.Parameter((1, tensor_train_p_list.shape[1]))
@@ -1099,7 +1106,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
     
     
             
-        #%%
+        #%
         ################## GD for differentiable layer
         # As currently written, does full batch gradient updates/ probably eats a lot of memory
         
@@ -1165,7 +1172,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         print(f'ConvComb:{eval_point_pred(y_hat_comb, testY[target_zone])[0]}')
         print(f'Ave:{eval_point_pred(sum(y_hat_local)/N_experts, testY[target_zone])[0]}')
 
-#%%%%%%%%%%%%%%% Newsvendor experiment
+#% Newsvendor experiment
 
     if target_problem == 'newsvendor':
         ### Train decision rules to mapping probability vectors to decisions
@@ -1203,7 +1210,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         plt.legend()
         plt.show()
         
-        #%%%%%%% Static forecast combinations
+        #% Static forecast combinations
         
         lambda_cc_dict = {}
         # find lambdas using approximations of inner argmin problems
@@ -1233,7 +1240,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         # Adaptive decision rules
         #coef_, inter_ = adapt_combination_newsvendor(train_targetY, comd_trainX_local.values, train_p_list, lr_model, crit_fract = critical_fractile, support = y_supp, bounds = False)
         
-        #%% PyTorch example
+        #% PyTorch example
         
         gamma = 0.01
         
@@ -1295,7 +1302,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         
         mlp_adapt_Newsv_Comb_Model.train_model(train_adaptive_loader, optimizer, epochs = 200, patience = patience, projection = False)
         
-        #%%
+        #%
         '''
         L_t = []
         for epoch in range(num_epochs):
@@ -1593,7 +1600,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         # find best iteration
         best_ind = np.where(np.array(losses) == min(losses))[0][0]
         '''
-        #%% Barycentric interpolation: learn mapping from inverse c.d.f. to c.d.f. (stepwise function analytically)
+        #% Barycentric interpolation: learn mapping from inverse c.d.f. to c.d.f. (stepwise function analytically)
         
         # Train additional ML predictor to learn mapping from quantile function to p.d.f. (the true is piecewise constant)
         target_quantiles = np.arange(0,1.01,.01)
@@ -1613,7 +1620,7 @@ for critical_fractile, iter_ in itertools.product(config['critical_fractile'], r
         #lambda_brc_dt = tune_combination_newsvendor(valid_localY, p_list, dt_model, brc_predictor= dt_model_inv, 
         #                                            type_ = 'barycenter', crit_fract = critical_fractile, support = y_supp, verbose = 1)
         
-        #%% Testing all methods
+        #% Testing all methods
         
         
         ##### Static Forecast Combinations
