@@ -54,8 +54,8 @@ plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
 def optimal_weights_CRPS(target_y, expert_probs, support = np.arange(0, 1.01, .01).round(2), 
                          quant_grid = np.arange(0.01, 1, 0.01)):
-    ''' Find optimal weights for combination by minimizing approximate CRPS over a grid of quantiles
-        The approximation follows from Gneiting & Ranjan, 2011. See also CRPS Learning, Berrisch, Ziel.
+    ''' Find optimal weights for linear pool of quantile forecasts minimizing CRPS. CRPS is approximated by quantile loss. 
+         The approximation follows from Gneiting & Ranjan, 2011. See also CRPS Learning, Berrisch, Ziel.
         '''
         
     n_obs = len(target_y)
@@ -89,6 +89,42 @@ def optimal_weights_CRPS(target_y, expert_probs, support = np.arange(0, 1.01, .0
         m.addConstr( pinball_loss_i[:,j] >=  (tau-1)*(target_y - Q_comb[:,j]) )
                           
     m.setObjective( sum(sum(pinball_loss_i)) )
+    m.optimize()
+    
+    return lambda_.X
+
+def decomp_CRPS(target_y, expert_probs, support = np.arange(0, 1.01, .01).round(2), 
+                         quant_grid = np.arange(0.01, 1, 0.01)):
+    ''' Find optimal weights for linear pool of quantile forecasts minimizing CRPS. CRPS is approximated by quantile loss. 
+         The approximation follows from Gneiting & Ranjan, 2011. See also CRPS Learning, Berrisch, Ziel.
+        '''
+        
+    n_obs = len(target_y)
+    n_experts = len(expert_probs)
+    n_locations = len(support)
+    
+    ### Turn PDFs to CDFs
+    print(expert_probs[0].cumsum(1))
+    F_list = [expert_probs[j].cumsum(1) for j in range(n_experts)]
+    
+    ### Find weights lambda that minimize the CRPS (use decomposition into divergence and uncertainty)
+    m = gp.Model()
+    m.setParam('OutputFlag', 1)
+    
+    lambda_ = m.addMVar((n_experts), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'barycentric coordinates')    
+    F_comb = m.addMVar( (n_obs, n_locations), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'combined quant function')    
+    crps_i = m.addMVar( (n_obs), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'combined quant function')    
+
+    m.addConstr( lambda_.sum() == 1)
+    m.addConstrs( F_comb[i,:] == sum([lambda_[j]*F_list[j][i] for j in range(n_experts)]) for i in range(n_obs))
+    
+    H_y = np.zeros((n_obs, n_locations))
+    for i in range(n_obs):
+        H_y[i][support >= target_y[i]] = 1
+    
+    m.addConstrs( crps_i[i] >= (F_comb[i] - H_y[i])@(F_comb[i] - H_y[i]) for i in range(n_obs))
+                          
+    m.setObjective( crps_i.sum())
     m.optimize()
     
     return lambda_.X
@@ -241,6 +277,114 @@ def wsum_tune_combination_newsvendor(target_y, prob_vectors, brc_predictor = [],
     
     return lambdas.X
 
+class LinearPoolCRPSLayer(nn.Module):        
+    def __init__(self, num_inputs, support, apply_softmax = False):
+        super(LinearPoolCRPSLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.num_inputs = num_inputs
+        self.support = support
+        self.apply_softmax = apply_softmax
+        
+    def forward(self, list_inputs):
+        """
+        Forward pass of the linear pool minimizing CRPS.
+
+        Args:
+            list_inputs: A list of of input tensors (discrete PDFs).
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors.
+        """
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        #weights = torch.nn.functional.softmax(self.weights)
+
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        if self.apply_softmax:
+            weights = torch.nn.functional.softmax(self.weights)
+        else:
+            weights = self.weights
+        
+        # Apply the weights element-wise to each input tensor !!!! CDFs
+        weighted_inputs = [weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_CDF = sum(weighted_inputs)
+
+        return combined_CDF
+    
+    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True):
+        # define projection problem for backward pass
+        lambda_proj = cp.Variable(self.num_inputs)
+        lambda_hat = cp.Parameter(self.num_inputs)
+        proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
+        
+        
+        L_t = []
+        best_train_loss = float('inf')
+
+        for epoch in range(epochs):
+            # activate train functionality
+            self.train()
+            running_loss = 0.0
+            # sample batch
+            for batch_data in train_loader:
+                
+                y_batch = batch_data[-1]
+                
+                #cdf_batch = [batch_data[i] for i in range(self.num_inputs)]
+
+                # clear gradients
+                optimizer.zero_grad()
+                
+                
+                # forward pass: combine forecasts and solve each newsvendor problem
+                comb_CDF = self.forward(batch_data[:-1])
+                
+                # estimate CRPS (heavyside function)
+
+                loss_i = [torch.square( comb_CDF[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
+                loss = sum(loss_i)/len(loss_i)
+
+                # Decomposition (see Online learning with the Continuous Ranked Probability Score for ensemble forecasting) 
+                #divergence_i = [(weights[j]*torch.norm(self.support - y_batch[i] )) for ]
+                
+                #loss_i = [weights[j]*torch.abs(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
+                #loss = sum(loss_i)/len(loss_i)
+                
+                # backward pass
+                loss.backward()
+                optimizer.step()                
+                
+                if (projection)and(self.apply_softmax != True):     
+                    lambda_hat.value = to_np(self.weights)
+                    proj_problem.solve(solver = 'GUROBI')
+                    # update parameter values
+                    with torch.no_grad():
+                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
+                
+                running_loss += loss.item()
+            
+
+            L_t.append(to_np(self.weights).copy())
+            average_train_loss = running_loss / len(train_loader)
+            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+
+            if average_train_loss < best_train_loss:
+                best_train_loss = average_train_loss
+                best_weights = copy.deepcopy(self.state_dict())
+                early_stopping_counter = 0
+                
+            else:
+                early_stopping_counter += 1
+                if early_stopping_counter >= patience:
+                    print("Early stopping triggered.")
+                    # recover best weights
+                    self.load_state_dict(best_weights)
+                    return
+
 def adapt_combination_newsvendor(target_y, X, prob_vectors, ml_predictor, brc_predictor = [], type_ = 'convex_comb', 
                                 crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
 
@@ -313,6 +457,34 @@ def adapt_combination_newsvendor(target_y, X, prob_vectors, ml_predictor, brc_pr
     
     return coef_.X, inter_.X
 
+from torch.utils.data import Dataset, DataLoader
+
+# Define a custom dataset
+class MyDataset(Dataset):
+    def __init__(self, *inputs):
+        self.inputs = inputs
+
+        # Check that all input tensors have the same length (number of samples)
+        self.length = len(inputs[0])
+        if not all(len(input_tensor) == self.length for input_tensor in inputs):
+            raise ValueError("Input tensors must have the same length.")
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        return tuple(input_tensor[idx] for input_tensor in self.inputs)
+
+# Define a custom data loader
+def create_data_loader(inputs, batch_size, num_workers=0, shuffle=True):
+    dataset = MyDataset(*inputs)
+    data_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=shuffle
+    )
+    return data_loader
 def tree_params():
     ''' Hyperparameters for tree algorithms'''
     params = {}
@@ -332,7 +504,7 @@ def params():
     params['split_date'] = '2013-01-01' # Defines train/test split
     params['end_date'] = '2013-12-30'
     
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     params['train_brc'] = False # If True, then saves models and results
     
     # Experimental setup parameters
@@ -368,6 +540,7 @@ row_counter = 0
 tuple_list = [tup for tup in itertools.product(config['critical_fractile'], range(config['iterations']))]
     
 #for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
+#%%
 
 for tup in tuple_list[row_counter:]:
     critical_fractile = tup[0]
@@ -476,8 +649,8 @@ for tup in tuple_list[row_counter:]:
     
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
-    #%%
-# Newsvendor experiment
+    #%
+#%% Newsvendor experiment
 
     if target_problem == 'newsvendor':
 
@@ -487,13 +660,47 @@ for tup in tuple_list[row_counter:]:
         #lambda_bench = averaging_decisions(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
         #lambda_tuned_inv, lambda_tuned_softmax = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
 
-        lambda_crps_tuned = optimal_weights_CRPS(train_targetY, train_p_list, support = y_supp)
-        #lambda_brc_opt = optimal_barycenter_weights(train_p_list, train_targetY, y_supp)
+        # Minimize CRPS using the QS decomposition (linear pool of quantile functions)
+        #lambda_crps_tuned = optimal_weights_CRPS(train_targetY, train_p_list, support = y_supp)
+        #%%
+        patience = 15
+        batch_size = 500
+        num_epochs = 1000
+        learning_rate = 1e-2
+        apply_softmax = True
+        train_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+        
+        # Minimize CRPS using the QS decomposition (linear pool of quantile functions)
+        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
+                                               apply_softmax = apply_softmax)
+        optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
+        lpool_crps_model.train_model(train_loader, optimizer, epochs = num_epochs, patience = 25, projection = True)
+        
+        if apply_softmax == False:
+            print(lpool_crps_model.weights)
+            lambda_cc_crps = to_np(lpool_crps_model.weights)
+        elif apply_softmax:
+            print(torch.nn.functional.softmax(lpool_crps_model.weights))
+            lambda_cc_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
 
+        #%%
+        #lambda_crps_v2 = decomp_CRPS(train_targetY, train_p_list, support = y_supp)
+        #%%
+        #lambda_brc_opt = optimal_barycenter_weights(train_p_list, train_targetY, y_supp)
+        
+        if apply_softmax == False:
+            print(lpool_crps_model.weights)
+            lambda_cc_crps = to_np(lpool_crps_model.weights)
+        elif apply_softmax:
+            print(torch.nn.functional.softmax(lpool_crps_model.weights))
+            lambda_cc_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
+            
+        print(lambda_crps_tuned)
+        #%
         #print(f'Lambda SBench:{lambda_bench}')
         #print(f'Lambda insample tune inv:{lambda_tuned_inv}')
         #print(f'Lambda insample tune softmax:{lambda_tuned_softmax}')
-
+        #%%
         print(f'Lambda crps:{lambda_crps_tuned}')
 
         #% Testing all methods
@@ -506,11 +713,12 @@ for tup in tuple_list[row_counter:]:
         p_brc = np.zeros((n_test_obs, nlocations))
         #p_cc_tune = sum([lambda_tuned_inv[i]*test_p_list[i] for i in range(N_experts)])
         
-        p_cc_crps = sum([lambda_crps_tuned[i]*test_p_list[i] for i in range(N_experts)])
+        p_cc_crps = sum([lambda_cc_crps[i]*test_p_list[i] for i in range(N_experts)])
+        
         p_brc_crps = np.zeros((n_test_obs, nlocations))
 
 
-        
+        '''
         # Barycenter with average & optimal coordinates
         for i in range(n_test_obs):
             temp_p_list = [p[i] for p in test_p_list]
@@ -524,18 +732,18 @@ for tup in tuple_list[row_counter:]:
             temp_p_brc, _, _ = wass2_barycenter_1D(N_experts*[y_supp], temp_p_list, lambda_coord = lambda_crps_tuned, support = y_supp, p = 2, 
                                        prob_dx = .01)
             p_brc_crps[i] = temp_p_brc
-        
+        '''
         
         # turn probability vectors to decisions/ closed-form solution for newsvendor problem    
-        models = [f'Model-{i}' for i in range(N_experts)] + ['CC-Ave', 'CC-CRPS', 'BRC-CRPS']
+        models = [f'Model-{i}' for i in range(N_experts)] + ['CC-Ave', 'LP-CRPS']
         
         Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(models))), columns = models)
         for i in range(N_experts):
             Prescriptions[f'Model-{i}'] = np.array([inverted_cdf([critical_fractile], y_supp, test_p_list[i][k]) for k in range(n_test_obs)]).reshape(-1)
         
         Prescriptions['CC-Ave'] = np.array([inverted_cdf([critical_fractile], y_supp, p_ave[i]) for i in range(n_test_obs)]).reshape(-1)
-        Prescriptions['CC-CRPS'] = np.array([inverted_cdf([critical_fractile], y_supp, p_cc_crps[i]) for i in range(n_test_obs)]).reshape(-1)
-        Prescriptions['BRC-CRPS'] = np.array([inverted_cdf([critical_fractile], y_supp, p_brc_crps[i]) for i in range(n_test_obs)]).reshape(-1)
+        Prescriptions['LP-CRPS'] = np.array([inverted_cdf([critical_fractile], y_supp, p_cc_crps[i]) for i in range(n_test_obs)]).reshape(-1)
+        #Prescriptions['BRC-CRPS'] = np.array([inverted_cdf([critical_fractile], y_supp, p_brc_crps[i]) for i in range(n_test_obs)]).reshape(-1)
 
         temp_output = pd.DataFrame()
         temp_output['Quantile'] = [critical_fractile]
@@ -550,5 +758,5 @@ for tup in tuple_list[row_counter:]:
             Output = temp_output.copy()
         else:
             Output = pd.concat([Output, temp_output])        
-        Output.to_csv(f'{cd}\\results\\CRPS_tuned_weight_allocation_tests.csv')
+        Output.to_csv(f'{cd}\\results\\linear_pool_CRPS_tuned_weight_allocation_tests.csv')
         row_counter += 1

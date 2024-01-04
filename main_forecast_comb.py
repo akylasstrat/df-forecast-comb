@@ -759,7 +759,7 @@ class CombNewsvendorLayer(nn.Module):
                 optimizer.step()
                 
                 
-                if (Projection)and(self.apply_softmax != True):     
+                if (projection)and(self.apply_softmax != True):     
                     lambda_hat.value = to_np(self.weights)
                     proj_problem.solve(solver = 'GUROBI')
                     # update parameter values
@@ -791,7 +791,108 @@ class CombNewsvendorLayer(nn.Module):
                     # recover best weights
                     self.load_state_dict(best_weights)
                     return
-                            
+                          
+class LinearPoolCRPSLayer(nn.Module):        
+    def __init__(self, num_inputs, support, apply_softmax = False):
+        super(LinearPoolCRPSLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.num_inputs = num_inputs
+        self.support = support
+        self.apply_softmax = apply_softmax
+        
+    def forward(self, list_inputs):
+        """
+        Forward pass of the linear pool minimizing CRPS.
+
+        Args:
+            list_inputs: A list of of input tensors (discrete PDFs).
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors.
+        """
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        #weights = torch.nn.functional.softmax(self.weights)
+
+        # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        if self.apply_softmax:
+            weights = torch.nn.functional.softmax(self.weights)
+        else:
+            weights = self.weights
+
+        # Apply the weights element-wise to each input tensor
+        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_CDF = sum(weighted_inputs)
+
+        return combined_CDF
+    
+    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True):
+        # define projection problem for backward pass
+        lambda_proj = cp.Variable(self.num_inputs)
+        lambda_hat = cp.Parameter(self.num_inputs)
+        proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
+        
+        
+        L_t = []
+        best_train_loss = float('inf')
+
+        for epoch in range(epochs):
+            # activate train functionality
+            self.train()
+            running_loss = 0.0
+            # sample batch
+            for batch_data in train_loader:
+                
+                y_batch = batch_data[-1]
+                
+                cdf_batch = [batch_data[i].cumsum(1) for i in range(self.num_inputs)]
+
+                # clear gradients
+                optimizer.zero_grad()
+                
+                
+                # forward pass: combine forecasts and solve each newsvendor problem
+                comb_CDF = self.forward(cdf_batch)
+                
+                # estimate CRPS
+                loss_i = [torch.square(comb_CDF - 1*(self.support - y_batch[i]) ).sum()]
+                loss = sum(loss_i)/len(loss_i)
+
+                # backward pass
+                loss.backward()
+                optimizer.step()                
+                
+                if (projection)and(self.apply_softmax != True):     
+                    lambda_hat.value = to_np(self.weights)
+                    proj_problem.solve(solver = 'GUROBI')
+                    # update parameter values
+                    with torch.no_grad():
+                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
+                
+                running_loss += loss.item()
+            
+
+            L_t.append(to_np(self.weights).copy())
+            average_train_loss = running_loss / len(train_loader)
+            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+
+            if average_train_loss < best_train_loss:
+                best_train_loss = average_train_loss
+                best_weights = copy.deepcopy(self.state_dict())
+                early_stopping_counter = 0
+                
+            else:
+                early_stopping_counter += 1
+                if early_stopping_counter >= patience:
+                    print("Early stopping triggered.")
+                    # recover best weights
+                    self.load_state_dict(best_weights)
+                    return
+                
 def params():
     ''' Set up the experiment parameters'''
 
@@ -803,7 +904,7 @@ def params():
     params['split_date'] = '2013-01-01' # Defines train/test split
     params['end_date'] = '2013-12-30'
     
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     params['train_brc'] = False # If True, then saves models and results
     
     # Experimental setup parameters
@@ -1273,6 +1374,12 @@ for tup in tuple_list[row_counter:]:
         #                                      NewsvendorLayer(support = y_supp, gamma = gamma))
         
         ### Static combination model
+#%%        
+        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), apply_softmax = False)
+        optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = learning_rate)
+        lpool_crps_model.train_model(train_loader, optimizer, epochs = 200, patience = patience, projection = True)
+#%%        
+        asdf
         Newsvendor_Comb_Model = CombNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, 
                                                     apply_softmax = True)
         
