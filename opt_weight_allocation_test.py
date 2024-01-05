@@ -676,13 +676,6 @@ for tup in tuple_list[row_counter:]:
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
         lpool_crps_model.train_model(train_loader, optimizer, epochs = num_epochs, patience = 25, projection = True)
         
-        if apply_softmax == False:
-            print(lpool_crps_model.weights)
-            lambda_cc_crps = to_np(lpool_crps_model.weights)
-        elif apply_softmax:
-            print(torch.nn.functional.softmax(lpool_crps_model.weights))
-            lambda_cc_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-
         #%%
         #lambda_crps_v2 = decomp_CRPS(train_targetY, train_p_list, support = y_supp)
         #%%
@@ -695,13 +688,13 @@ for tup in tuple_list[row_counter:]:
             print(torch.nn.functional.softmax(lpool_crps_model.weights))
             lambda_cc_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
             
-        print(lambda_crps_tuned)
+        #print(lambda_crps_tuned)
         #%
         #print(f'Lambda SBench:{lambda_bench}')
         #print(f'Lambda insample tune inv:{lambda_tuned_inv}')
         #print(f'Lambda insample tune softmax:{lambda_tuned_softmax}')
         #%%
-        print(f'Lambda crps:{lambda_crps_tuned}')
+        #print(f'Lambda crps:{lambda_crps_tuned}')
 
         #% Testing all methods
         
