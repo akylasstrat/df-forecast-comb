@@ -79,10 +79,17 @@ def newsvendor_cvar_loss(pred, actual, q = 0.5, risk_aversion = 0.5, e = 0.05):
 
 
 def pinball(prediction, target, quantiles):
-    ''' Evaluates Probabilistic Forecasts, outputs Pinball Loss for specified quantiles'''
+    ''' Evaluates Probabilistic Forecasts, outputs average Pinball Loss for specified quantiles'''
     num_quant = len(quantiles)
-    pinball_loss = np.maximum( (np.tile(target, (1,num_quant)) - prediction)*quantiles,(prediction - np.tile(target , (1,num_quant) ))*(1-quantiles))
-    return pinball_loss  
+    
+    quantiles = np.array(quantiles)
+    target_copy = target.copy().reshape(-1,1)
+    pred_copy = prediction.copy()
+    
+    pinball_loss = np.maximum( (np.tile(target_copy, (1,num_quant)) - pred_copy)*quantiles, 
+                              (pred_copy - np.tile(target_copy , (1,num_quant) ))*(1-quantiles))
+
+    return pinball_loss.mean(0)
 
 def eval_point_pred(predictions, actual, digits = 3, per_node = True):
     ''' Returns point forecast metrics: RMSE, MAE '''
