@@ -67,7 +67,7 @@ class EnsemblePrescriptiveTree(object):
 
     if parallel == False:
         for i in range(self.n_estimators):
-            print('Ensemble Tree: ',i+1)
+            if i%15==0: print(f'Ensemble Tree:{i+1}')
             if cpu_time: start_time = time.process_time()
 
             #Select subset of predictors

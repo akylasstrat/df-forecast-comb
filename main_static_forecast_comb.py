@@ -349,6 +349,42 @@ def tree_params():
 
 from torch.utils.data import Dataset, DataLoader
 
+def insample_weight_tuning(target_y, prob_vectors, crit_fract = 0.5, 
+                           support = np.arange(0, 1.01, .01).round(2), verbose = 0):
+    ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
+        set weights based on inverse cost (or could use softmax activation)
+        - Args:
+            target_y: realizations of uncertainty
+            prob_vectors: list of predictive PDFs
+            crit_fract: critical fractile for newsvendor problem
+            support: support locations
+        - Output:
+            lambdas_inv: weights based on inverse in-sample performance'''
+
+    n_obs = prob_vectors[0].shape[0]
+    n_models = len(prob_vectors)
+
+    ### Find optimal decisions under perfect foresight information
+    
+    print('Solve in-sample stochastic problems...')
+    z_opt = np.zeros((n_obs, n_models))
+    insample_cost = np.zeros((n_models))
+    insample_inverse_cost = np.zeros((n_models))
+    
+    for j in range(n_models):
+        for i in range(n_obs):
+            # Solve stochastic problem, find decision
+            z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
+        # Estimate decision cost (regret)
+                
+        insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
+        insample_inverse_cost[j] = 1/insample_cost[j]
+
+    lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
+    lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
+
+    return lambdas_inv, lambdas_softmax
+
 # Define a custom dataset
 class MyDataset(Dataset):
     def __init__(self, *inputs):
@@ -528,7 +564,7 @@ class AdaptiveCombNewsvendorLayer(nn.Module):
             return self.model(x).detach().numpy()
         
 class LinearPoolNewsvendorLayer(nn.Module):        
-    def __init__(self, num_inputs, support, gamma, apply_softmax = False, regularizer = 'crps'):
+    def __init__(self, num_inputs, support, gamma, apply_softmax = False, critic_fract = 0.5, regularizer = 'crps'):
         super(LinearPoolNewsvendorLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -539,6 +575,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
         self.gamma = gamma
         self.apply_softmax = apply_softmax
         self.regularizer = regularizer
+        self.crit_fract = critic_fract
         
         n_locations = len(self.support)
         # newsvendor layer (for i-th observation)
@@ -548,8 +585,8 @@ class LinearPoolNewsvendorLayer(nn.Module):
         prob_weights = cp.Parameter(n_locations)
             
         newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                             pinball_loss >= critical_fractile*(error), 
-                             pinball_loss >= (critical_fractile - 1)*(error),]
+                             pinball_loss >= self.crit_fract*(error), 
+                             pinball_loss >= (self.crit_fract - 1)*(error),]
         
         newsv_cost = prob_weights@pinball_loss
         
@@ -628,10 +665,10 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 error_hat = (y_batch.reshape(-1,1) - z_hat)
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                pinball_loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))
+                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.gamma)*pinball_loss + self.gamma*crps_i/len(self.support)
+                loss = pinball_loss + self.gamma*crps_i/len(self.support)
                 
                 # estimate regret
                 #loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) \
@@ -799,8 +836,10 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad}
     params['N_sample'] = [10, 50, 100, 200, 500]
-    params['N_experts'] = 3
+    params['N_experts'] = 9
     params['iterations'] = 5
+    params['target_zones'] = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5',
+                              'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     params['critical_fractile'] = np.arange(0.1, 1, 0.1).round(2)
     
@@ -824,31 +863,33 @@ aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col =
 #!!!! Add randomization based on the iteration counter here
 
 target_problem = config['problem']
-row_counter = 0
 
-tuple_list = [tup for tup in itertools.product(config['critical_fractile'], range(config['iterations']))]
+row_counter = 0
+train_forecast_model = True
+
+tuple_list = [tup for tup in itertools.product(config['target_zones'], config['critical_fractile'])]
 
 #for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
-    
+#%%
 for tup in tuple_list[row_counter:]:
-    critical_fractile = tup[0]
-    iter_ = tup[1]
-
-
+    target_zone = tup[0]    
+    critical_fractile = tup[1]
+    
+    if row_counter == 0:
+        train_forecast_model = True
+    elif (row_counter != 0) and (target_zone == tuple_list[row_counter-1][0]):    
+        train_forecast_model = False
+    elif (row_counter != 0) and (target_zone != tuple_list[row_counter-1][0]):
+        train_forecast_model = True
+        
     all_zones = [f'Z{i}' for i in range(1,11)]
     np.random.seed(row_counter)
     
-    print(f'Quantile:{critical_fractile}, iteration:{iter_}')
+    print(f'Quantile:{critical_fractile}, zone:{target_zone}')
     #target_zone = config['target_zone']
     #expert_zones = ['Z2', 'Z4', 'Z8', 'Z9']
     
-    target_zone = np.random.choice(all_zones)
-    expert_zones = all_zones.copy()
-    expert_zones.remove(target_zone)
-    expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
-    
-    pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
-    #%
+    #target_zone = np.random.choice(all_zones)
     # number of forecasts to combine
     N_experts = config['N_experts']
     
@@ -858,103 +899,111 @@ for tup in tuple_list[row_counter:]:
     step = .01
     y_supp = np.arange(0, 1+step, step).round(2)
     nlocations = len(y_supp)
+    pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
     
-    #%
-    ### Create train/test sets for all series
-    
-    trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
-    comb_trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)
-    testY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['split_date']:].round(2)
-    
-    # feature data for target location/zone
-    
-    local_features_df = aggr_wind_df[target_zone].copy()
-    local_features_df['wspeed10_sq'] = np.power(local_features_df['wspeed10'],2)
-    local_features_df['wspeed10_cb'] = np.power(local_features_df['wspeed10'],3)
-    
-    local_features_df['wspeed100_sq'] = np.power(local_features_df['wspeed100'],2)
-    local_features_df['wspeed100_cb'] = np.power(local_features_df['wspeed100'],3)
-    
-    local_features_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']] = aggr_wind_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']]
-    
-    local_feat = ['wspeed10', 'wspeed100', 'wdir10_rad', 'wdir100_rad', 'diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']
-    trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][:N_sample].round(2)
-    comd_trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][N_sample:].round(2)
-    testX_local = local_features_df[local_feat][config['split_date']:].round(2)
-    
-    # supervised sets for experts    
-    trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
-    comb_trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)
-    testX_exp = aggr_wind_df[expert_zones][config['split_date']:].round(2)
-    
-    # number of training observations for the combination model
-    n_obs = len(comb_trainY)
-    n_test_obs = len(testY)
-    
-    #% Train experts, i.e., probabilistic forecasting models in adjacent locations    
-    prob_models = []
-    for i, zone in enumerate(expert_zones[:N_experts]):
-        print(f'Training model {i}')
+    if train_forecast_model:
         
-        #temp_model = EnsemblePrescriptiveTree_OOB(n_estimators = 10, max_features = 1, type_split = 'quant')
-        #temp_model.fit(trainX_exp[zone][pred_col].values.round(2), trainY[zone].values, y_supp, y_supp, bootstrap = False, quant = np.arange(.01, 1, .01), problem = 'mse') 
-     
-        temp_model = EnsemblePrescriptiveTree(n_estimators = 30, max_features = len(pred_col), type_split = 'quant' )
-        temp_model.fit(trainX_exp[zone][pred_col].values, trainY[zone].values, quant = np.arange(.01, 1, .01), problem = 'mse') 
-        prob_models.append(temp_model)
+        expert_zones = all_zones.copy()
+        expert_zones.remove(target_zone)
+        expert_zones = expert_zones[:config['N_experts']]
+        #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
+        #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
     
-    #% Generate predictions for training/test set for forecast combination
-    # find local weights for meta-training set/ map weights to support locations
-    print('Generating prob. forecasts for train/test set...')
-    
-    train_w_list = []
-    train_p_list = []
-    for i, p in enumerate(expert_zones[:N_experts]):
-        train_w_list.append(prob_models[i].find_weights(comb_trainX_exp[p][pred_col].values, trainX_exp[p][pred_col].values))
-        train_p_list.append(wemp_to_support(train_w_list[i], trainY[p].values, y_supp))
+        ### Create train/test sets for all series
         
-    test_w_list = []
-    test_p_list = []
-    for i, p in enumerate(expert_zones[:N_experts]):
-        test_w_list.append(prob_models[i].find_weights(testX_exp[p][pred_col].values, trainX_exp[p][pred_col].values))
-        test_p_list.append(wemp_to_support(test_w_list[i], trainY[p].values, y_supp))
+        trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
+        comb_trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)
+        testY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['split_date']:].round(2)
+    
+        # feature data for target location/zone
         
-    #% Visualize some prob. forecasts
-    #%
-    # step 1: find inverted CDFs
-    F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j in range(N_experts)]
+        local_features_df = aggr_wind_df[target_zone].copy()
+        local_features_df['wspeed10_sq'] = np.power(local_features_df['wspeed10'],2)
+        local_features_df['wspeed10_cb'] = np.power(local_features_df['wspeed10'],3)
     
-    plt.plot(comb_trainY[target_zone][200:300])
-    for i in [0,2]:
-        #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
+        local_features_df['wspeed100_sq'] = np.power(local_features_df['wspeed100'],2)
+        local_features_df['wspeed100_cb'] = np.power(local_features_df['wspeed100'],3)
         
-        plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3)
-    plt.show()
+        local_features_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']] = aggr_wind_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']]
+        
+        local_feat = ['wspeed10', 'wspeed100', 'wdir10_rad', 'wdir100_rad', 'diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']
+        trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][:N_sample].round(2)
+        comd_trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][N_sample:].round(2)
+        testX_local = local_features_df[local_feat][config['split_date']:].round(2)
     
-    ### Define the rest of the supervised learning parameters     
-    # projection step (used for gradient-based methods)
+        # supervised sets for experts    
+        trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
+        comb_trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)
+        testX_exp = aggr_wind_df[expert_zones][config['split_date']:].round(2)
     
-    #y_proj = cp.Variable(N_experts)
-    #y_hat = cp.Parameter(N_experts)
-    #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
+        # number of training observations for the combination model
+        n_obs = len(comb_trainY)
+        n_test_obs = len(testY)
     
-    train_targetY = comb_trainY[target_zone].values.reshape(-1)
+        #% Train experts, i.e., probabilistic forecasting models in adjacent locations    
+        prob_models = []
+        for i, zone in enumerate(expert_zones[:N_experts]):
+            print(f'Training model {i}')
+            
+            #temp_model = EnsemblePrescriptiveTree_OOB(n_estimators = 10, max_features = 1, type_split = 'quant')
+            #temp_model.fit(trainX_exp[zone][pred_col].values.round(2), trainY[zone].values, y_supp, y_supp, bootstrap = False, quant = np.arange(.01, 1, .01), problem = 'mse') 
+         
+            temp_model = EnsemblePrescriptiveTree(n_estimators = 30, max_features = len(pred_col), type_split = 'quant' )
+            temp_model.fit(trainX_exp[zone][pred_col].values, trainY[zone].values, quant = np.arange(.01, 1, .01), problem = 'mse') 
+            prob_models.append(temp_model)
+        
+        #% Generate predictions for training/test set for forecast combination
+        # find local weights for meta-training set/ map weights to support locations
+        print('Generating prob. forecasts for train/test set...')
+        
+        train_w_list = []
+        train_p_list = []
+        for i, p in enumerate(expert_zones[:N_experts]):
+            train_w_list.append(prob_models[i].find_weights(comb_trainX_exp[p][pred_col].values, trainX_exp[p][pred_col].values))
+            train_p_list.append(wemp_to_support(train_w_list[i], trainY[p].values, y_supp))
+            
+        test_w_list = []
+        test_p_list = []
+        for i, p in enumerate(expert_zones[:N_experts]):
+            test_w_list.append(prob_models[i].find_weights(testX_exp[p][pred_col].values, trainX_exp[p][pred_col].values))
+            test_p_list.append(wemp_to_support(test_w_list[i], trainY[p].values, y_supp))
+            
+        #% Visualize some prob. forecasts
+        #%
+        # step 1: find inverted CDFs
+        F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j in range(N_experts)]
+        
+        plt.plot(comb_trainY[target_zone][200:300])
+        for i in [0,2]:
+            #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
+            
+            plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3)
+        plt.show()
     
-    # Supervised learning set as tensors for PyTorch
-    tensor_trainY = torch.FloatTensor(train_targetY)
-    tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
-    tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(N_experts)]
-    
-    feat_scaler = MinMaxScaler()
-    feat_scaler.fit(comd_trainX_local)
-    tensor_trainX = torch.FloatTensor(feat_scaler.transform(comd_trainX_local))
-    tensor_testX = torch.FloatTensor(feat_scaler.transform(testX_local))
-    
-    train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
-    
-    
-    n_train_obs = len(train_targetY)
-    n_test_obs = len(testY)
+        ### Define the rest of the supervised learning parameters     
+        # projection step (used for gradient-based methods)
+        
+        #y_proj = cp.Variable(N_experts)
+        #y_hat = cp.Parameter(N_experts)
+        #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
+        
+        train_targetY = comb_trainY[target_zone].values.reshape(-1)
+        
+        # Supervised learning set as tensors for PyTorch
+        tensor_trainY = torch.FloatTensor(train_targetY)
+        tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
+        tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(N_experts)]
+        
+        feat_scaler = MinMaxScaler()
+        feat_scaler.fit(comd_trainX_local)
+        tensor_trainX = torch.FloatTensor(feat_scaler.transform(comd_trainX_local))
+        tensor_testX = torch.FloatTensor(feat_scaler.transform(testX_local))
+        
+        train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
+        
+        
+        n_train_obs = len(train_targetY)
+        n_test_obs = len(testY)
     
     if target_problem == 'mse':
         
@@ -993,7 +1042,7 @@ for tup in tuple_list[row_counter:]:
         num_epochs = 100
         
         train_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-        convex_layer = ConvexCombinationLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
+        #convex_layer = ConvexCombinationLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
         
         
         # Forward pass through the layer with 3 inputs
@@ -1172,10 +1221,14 @@ for tup in tuple_list[row_counter:]:
             lambda_cc_dict[f'Model-{i}'] = temp_ind
             
         lambda_cc_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
+        
+        # Set weights to in-sample performance
+        lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
 
         # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
         lambda_ = averaging_decisions(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
-    
+
+        lambda_cc_dict['Insample'] = lambda_tuned_inv    
         lambda_cc_dict['SalvaBench'] = lambda_
                 
         #% PyTorch layers
@@ -1201,11 +1254,12 @@ for tup in tuple_list[row_counter:]:
 
 
         ##### Decision-focused combination for different values of gamma
-        #%%
-        for gamma in [0.1, 0.5]:
+        
+        for gamma in [0.1, 1, 10]:
             
             lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
-                                                        gamma = gamma, apply_softmax = True, regularizer=None)
+                                                        gamma = gamma, critic_fract = critical_fractile,
+                                                        apply_softmax = True, regularizer=None)
             
             optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
             
@@ -1216,7 +1270,12 @@ for tup in tuple_list[row_counter:]:
             else:
                 lambda_cc_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
                 
-
+        print(lambda_cc_dict)
+        for m in lambda_cc_dict.keys():
+            plt.plot(lambda_cc_dict[m], label = m)
+        plt.legend()
+        plt.show()
+        
         ### Adaptive combination model
         '''
         train_adaptive_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
@@ -1235,9 +1294,8 @@ for tup in tuple_list[row_counter:]:
         
         mlp_adapt_Newsv_Comb_Model.train_model(train_adaptive_loader, optimizer, epochs = 200, patience = patience, projection = False)
         '''
-        
         ##### Static Forecast Combinations
-        #%%
+        
         # turn probability vectors to decisions/ closed-form solution for newsvendor problem    
         models = list(lambda_cc_dict.keys())
         
@@ -1250,11 +1308,11 @@ for tup in tuple_list[row_counter:]:
             #!!!!!! Add estimation of quantile loss or CRPS over the whole grid
             
         temp_QS = pd.DataFrame()
-        temp_QS['Iteration'] = [iter_]
+        temp_QS['Target'] = [target_zone]
 
         temp_Decision_cost = pd.DataFrame()
         temp_Decision_cost['Quantile'] = [critical_fractile]
-        temp_Decision_cost['Iteration'] = iter_
+        temp_Decision_cost['Target'] = target_zone
 
         for m in models:
             print(f'{m}:{100*newsvendor_loss(Prescriptions[m].values, testY[target_zone], q = critical_fractile).round(4)}')
@@ -1273,27 +1331,28 @@ for tup in tuple_list[row_counter:]:
             
             temp_QS[m] = [temp_qs]
             
-            if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_0.5']:
+            if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1', 'DF_10']:
                 plt.plot(temp_qs, label = m)
         plt.legend()
+        plt.ylabel('Pinball loss')
+        plt.xticks(np.arange(len(target_quant)), target_quant)
+        plt.xlabel('Quantile')
         plt.show()
         
 
-        #%%
         if row_counter == 0: 
             Decision_cost = temp_Decision_cost.copy()
         else:
-            Decision_cost = pd.concat([Decision_cost, temp_Decision_cost])        
+            Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)
             
         if row_counter == 0: 
             QS_df = temp_QS.copy()
         else:
-            QS_df = pd.concat([QS_df, temp_QS])        
+            QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
             
         Decision_cost.to_csv(f'{cd}\\results\\static_linearpool_Newsvendor_cost.csv')
-        row_counter += 1
-
         QS_df.to_csv(f'{cd}\\results\\static_linear_pool_QS.csv')
+        
         row_counter += 1
         
         ### Adaptive Forecast Combinations
