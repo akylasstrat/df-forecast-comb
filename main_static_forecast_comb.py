@@ -640,6 +640,8 @@ class LinearPoolNewsvendorLayer(nn.Module):
         
         L_t = []
         best_train_loss = float('inf')
+        early_stopping_counter = 0
+        best_weights = copy.deepcopy(self.state_dict())
 
         for epoch in range(epochs):
             # activate train functionality
@@ -867,6 +869,10 @@ target_problem = config['problem']
 row_counter = 0
 train_forecast_model = True
 
+Decision_cost = pd.read_csv(f'{cd}\\results\\static_linearpool_Newsvendor_cost.csv', index_col = 0)
+QS_df = pd.read_csv(f'{cd}\\results\\static_linear_pool_QS.csv', index_col = 0)
+
+row_counter = len(Decision_cost)
 tuple_list = [tup for tup in itertools.product(config['target_zones'], config['critical_fractile'])]
 
 #for critical_fractile, iter_ in itertools.product(config['critical_fractile'], range(config['iterations'])):
@@ -882,6 +888,7 @@ for tup in tuple_list[row_counter:]:
     elif (row_counter != 0) and (target_zone != tuple_list[row_counter-1][0]):
         train_forecast_model = True
         
+    
     all_zones = [f'Z{i}' for i in range(1,11)]
     np.random.seed(row_counter)
     
@@ -1223,7 +1230,7 @@ for tup in tuple_list[row_counter:]:
         lambda_cc_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
         
         # Set weights to in-sample performance
-        lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
+        lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp)
 
         # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
         lambda_ = averaging_decisions(train_targetY, train_p_list, crit_fract = critical_fractile, support = y_supp, bounds = False)
