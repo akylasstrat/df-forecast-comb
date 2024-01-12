@@ -14,17 +14,20 @@ import matplotlib.pyplot as plt
 import sys, os
 import pickle
 import gurobipy as gp
-
-from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from gurobi_ml import add_predictor_constr
-from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.preprocessing import MinMaxScaler
-
-from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
+import torch
 
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
+
+#from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from gurobi_ml import add_predictor_constr
+#from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+#from sklearn.tree import DecisionTreeRegressor
+from sklearn.preprocessing import MinMaxScaler
+
+#from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
+
+
 #project_dir=Path(cd).parent.__str__()   #project_directory
 
 from EnsemblePrescriptiveTree import *
@@ -34,18 +37,9 @@ from optimization_functions import *
 from LinearDecisionTree import *
 from sklearn.neural_network import MLPRegressor
 
-import copy
-
 from utility_functions import *
 from optimal_transport_functions import *
-
-import cvxpy as cp
-import torch
-from torch import nn
-from cvxpylayers.torch import CvxpyLayer
-
-def to_np(x):
-    return x.detach().numpy()
+from torch_layers_functions import *
 
 # IEEE plot parameters (not sure about mathfont)
 plt.rcParams['figure.constrained_layout.use'] = True
@@ -414,443 +408,9 @@ def insample_weight_tuning(target_y, prob_vectors, problem = 'newsvendor',
 
     return lambdas_inv, lambdas_softmax
 
-# Define a custom dataset
-class MyDataset(Dataset):
-    def __init__(self, *inputs):
-        self.inputs = inputs
 
-        # Check that all input tensors have the same length (number of samples)
-        self.length = len(inputs[0])
-        if not all(len(input_tensor) == self.length for input_tensor in inputs):
-            raise ValueError("Input tensors must have the same length.")
-
-    def __len__(self):
-        return self.length
-
-    def __getitem__(self, idx):
-        return tuple(input_tensor[idx] for input_tensor in self.inputs)
-
-# Define a custom data loader
-def create_data_loader(inputs, batch_size, num_workers=0, shuffle=True):
-    dataset = MyDataset(*inputs)
-    data_loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=shuffle
-    )
-    return data_loader
-
-class AdaptiveCombNewsvendorLayer(nn.Module):        
-    def __init__(self, input_size, hidden_sizes, output_size, 
-                 support, gamma, activation=nn.ReLU(), apply_softmax = False):
-        super(AdaptiveCombNewsvendorLayer, self).__init__()
-        """
-        Adaptive forecast combination for newsvendor problem> predicts combination weights given features
-        Args:
-            input_size, hidden_sizes, output_size: standard arguments for declaring an MLP
-            
-            output_size: equal to the number of combination weights, i.e., number of experts we want to combine
-            
-        """
-        # Initialize learnable weight parameters
-        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
-        self.weights = nn.Parameter(torch.FloatTensor((1/output_size)*np.ones(output_size)).requires_grad_())
-        self.num_experts = output_size
-        self.support = support
-        self.gamma = gamma
-        self.apply_softmax = apply_softmax
         
-        # create sequential MLP model to predict combination weights
-        layer_sizes = [input_size] + hidden_sizes + [output_size]
-        layers = []
-        for i in range(len(layer_sizes) - 1):
-            layers.append(nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
-            if i < len(layer_sizes) - 2:
-                layers.append(activation)
                 
-        self.model = nn.Sequential(*layers)
-        if apply_softmax:
-            self.model.add_module('softmax', nn.Softmax())
-        
-        # newsvendor layer
-        z = cp.Variable((1))    
-        pinball_loss = cp.Variable(len(support))
-        error = cp.Variable(len(support))
-        w_error = cp.Variable(len(support))
-        prob_weights = cp.Parameter(len(support))
-        
-        newsv_constraints = [z >= 0, z <= 1, error == y_supp - z,
-                             pinball_loss >= critical_fractile*(error), 
-                             pinball_loss >= (critical_fractile - 1)*(error), 
-                             w_error == cp.multiply(prob_weights, error)]
-
-        newsv_objective = cp.Minimize( prob_weights@pinball_loss + self.gamma*cp.norm(w_error)) 
-        newsv_problem = cp.Problem(newsv_objective, newsv_constraints)
-        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights], variables = [z, pinball_loss, error, w_error] )
-        
-    def forward(self, x, list_inputs):
-        """
-        Forward pass of the newvendor layer.
-
-        Args:
-            x: input tensors/ features
-            list_inputs: A list of of input tensors/ probability vectors.
-
-        Returns:
-            torch.Tensor: The convex combination of input tensors.
-        """
-
-        # Forwatd pass of the MLP to predict the combination weights (use softmax activation)
-        weights = self.model(x)
-
-        # Apply the weights element-wise to each input tensor
-        weighted_inputs = [weights[k,i] * input_tensor for k in range(weights.shape[0]) for i, input_tensor in enumerate(list_inputs)]
-
-        #print(sum(weighted_inputs).shape)
-        
-        # Perform the convex combination across input vectors
-        combined_vector = sum(weighted_inputs)
-
-        # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.newsvendor_layer(combined_vector)
-        return cvxpy_output
-    
-    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True):
-        # define projection problem for backward pass
-        lambda_proj = cp.Variable(self.num_experts)
-        lambda_hat = cp.Parameter(self.num_experts)
-        proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
-        
-        
-        L_t = []
-        best_train_loss = float('inf')
-
-        for epoch in range(epochs):
-            # activate train functionality
-            self.train()
-            running_loss = 0.0
-            # sample batch
-            for batch_data in train_loader:
-                
-                y_batch = batch_data[-1]
-                x_batch = batch_data[-2]
-                p_list_batch = batch_data[0:-2]
-                
-                # clear gradients
-                optimizer.zero_grad()
-                
-                # forward pass: combine forecasts and solve each newsvendor problem
-                z_hat = self.forward(x_batch, p_list_batch)[0]
-                
-                error_hat = (y_batch.reshape(-1,1) - z_hat)
-                # estimate regret
-                loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) \
-                        + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))\
-                        + self.gamma*error_hat.norm()
-
-                # backward pass
-                loss.backward()
-                optimizer.step()
-                
-                
-                if (Projection)and(self.apply_softmax != True):     
-                    lambda_hat.value = to_np(self.weights)
-                    proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
-                    with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
-                
-                running_loss += loss.item()
-            
-
-            L_t.append(to_np(self.weights).copy())
-            
-            # plot the coefficients for sanity check
-            if epoch % 15 ==0:
-                plt.plot(L_t)
-                plt.show()
-                
-            average_train_loss = running_loss / len(train_loader)
-            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
-
-            if average_train_loss < best_train_loss:
-                best_train_loss = average_train_loss
-                best_weights = copy.deepcopy(self.state_dict())
-                early_stopping_counter = 0
-                
-            else:
-                early_stopping_counter += 1
-                if early_stopping_counter >= patience:
-                    print("Early stopping triggered.")
-                    # recover best weights
-                    self.load_state_dict(best_weights)
-                    return
-                
-    def predict_weights(self, x):
-        'Forecast combination weights, inference only'
-        with torch.no_grad():            
-            return self.model(x).detach().numpy()
-        
-class LinearPoolNewsvendorLayer(nn.Module):        
-    def __init__(self, num_inputs, support, 
-                 gamma, apply_softmax = False, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
-        super(LinearPoolNewsvendorLayer, self).__init__()
-
-        # Initialize learnable weight parameters
-        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
-        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
-        self.num_inputs = num_inputs
-        self.support = support
-        self.risk_aversion = risk_aversion
-        self.gamma = gamma
-        self.apply_softmax = apply_softmax
-        self.regularizer = regularizer
-        self.crit_fract = critic_fract
-        
-        n_locations = len(self.support)
-        # newsvendor layer (for i-th observation)
-        z = cp.Variable((1))    
-        pinball_loss = cp.Variable(n_locations)
-        error = cp.Variable(n_locations)
-        prob_weights = cp.Parameter(n_locations)
-            
-        newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                             pinball_loss >= self.crit_fract*(error), 
-                             pinball_loss >= (self.crit_fract - 1)*(error),]
-        
-        newsv_cost = (1-self.risk_aversion)*prob_weights@pinball_loss
-        
-        # define aux variable
-        w_error = cp.multiply(prob_weights, error)
-        l2_regularization = self.risk_aversion*cp.norm(w_error)
-
-        objective_funct = cp.Minimize( newsv_cost + l2_regularization ) 
-        
-        newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights],
-                                           variables = [z, pinball_loss, error] )
-        
-    def forward(self, list_inputs):
-        """
-        Forward pass of the newvendor layer.
-
-        Args:
-            list_inputs: A list of of input tensors/ PDFs.
-
-        Returns:
-            torch.Tensor: The convex combination of input tensors/ combination of PDFs.
-        """
-        # Ensure that the weights are in the range [0, 1] using softmax activation
-        if self.apply_softmax:
-            weights = torch.nn.functional.softmax(self.weights, dim = 0)
-        else:
-            weights = self.weights
-
-        # Apply the weights element-wise to each input tensor
-        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
-
-        # Perform the convex combination across input vectors
-        combined_pdf = sum(weighted_inputs)
-
-        # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.newsvendor_layer(combined_pdf)
-        return combined_pdf, cvxpy_output
-    
-    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True):
-        # define projection problem for backward pass
-
-        if (projection)and(self.apply_softmax != True):     
-            lambda_proj = cp.Variable(self.num_inputs)
-            lambda_hat = cp.Parameter(self.num_inputs)
-            proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
-        
-        
-        L_t = []
-        best_train_loss = float('inf')
-        early_stopping_counter = 0
-        best_weights = copy.deepcopy(self.state_dict())
-
-        for epoch in range(epochs):
-            # activate train functionality
-            self.train()
-            running_loss = 0.0
-            # sample batch data
-            for batch_data in train_loader:
-                
-                y_batch = batch_data[-1]
-                
-                # clear gradients
-                optimizer.zero_grad()
-                
-                # forward pass: combine forecasts and solve each newsvendor problem
-                output_hat = self.forward(batch_data[:-1])
-
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
-                
-                z_hat = output_hat[1][0]
-                
-                # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
-                error_hat = (y_batch.reshape(-1,1) - z_hat)
-
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                l2_loss = error_hat.norm(p=2)
-                
-                # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
-                    + self.gamma*crps_i/len(self.support)
-                
-                # estimate regret
-                #loss = (critical_fractile*error_hat[error_hat>0].norm(p=1) \
-                #        + (1-critical_fractile)*error_hat[error_hat<0].norm(p=1))\
-                #        + self.gamma*()
-
-                # backward pass
-                loss.backward()
-                optimizer.step()
-                
-                # Apply projection
-                if (projection)and(self.apply_softmax != True):     
-                    lambda_hat.value = to_np(self.weights)
-                    proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
-                    with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
-                
-                running_loss += loss.item()
-            
-
-            L_t.append(to_np(self.weights).copy())
-            
-            # plot the coefficients for sanity check
-            #if epoch % 15 ==0:
-            #    plt.plot(L_t)
-            #    plt.show()
-                
-            average_train_loss = running_loss / len(train_loader)
-            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
-
-            if average_train_loss < best_train_loss:
-                best_train_loss = average_train_loss
-                best_weights = copy.deepcopy(self.state_dict())
-                early_stopping_counter = 0
-                
-            else:
-                early_stopping_counter += 1
-                if early_stopping_counter >= patience:
-                    print("Early stopping triggered.")
-                    # recover best weights
-                    self.load_state_dict(best_weights)
-                    return
-                          
-class LinearPoolCRPSLayer(nn.Module):        
-    def __init__(self, num_inputs, support, apply_softmax = False):
-        super(LinearPoolCRPSLayer, self).__init__()
-
-        # Initialize learnable weight parameters
-        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
-        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
-        self.num_inputs = num_inputs
-        self.support = support
-        self.apply_softmax = apply_softmax
-        
-    def forward(self, list_inputs):
-        """
-        Forward pass of the linear pool minimizing CRPS.
-
-        Args:
-            list_inputs: A list of of input tensors (discrete PDFs).
-
-        Returns:
-            torch.Tensor: The convex combination of input tensors.
-        """
-        # Ensure that the weights are in the range [0, 1] using sigmoid activation
-        #weights = torch.nn.functional.softmax(self.weights)
-
-        # Ensure that the weights are in the range [0, 1] using sigmoid activation
-        if self.apply_softmax:
-            weights = torch.nn.functional.softmax(self.weights, dim = 0)
-        else:
-            weights = self.weights
-        
-        # Apply the weights element-wise to each input tensor !!!! CDFs
-        weighted_inputs = [weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
-
-        # Perform the convex combination across input vectors
-        combined_CDF = sum(weighted_inputs)
-
-        return combined_CDF
-    
-    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True):
-        # define projection problem for backward pass
-        lambda_proj = cp.Variable(self.num_inputs)
-        lambda_hat = cp.Parameter(self.num_inputs)
-        proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
-        
-        
-        L_t = []
-        best_train_loss = float('inf')
-
-        for epoch in range(epochs):
-            # activate train functionality
-            self.train()
-            running_loss = 0.0
-            # sample batch
-            for batch_data in train_loader:
-                
-                y_batch = batch_data[-1]
-                
-                #cdf_batch = [batch_data[i] for i in range(self.num_inputs)]
-
-                # clear gradients
-                optimizer.zero_grad()
-                
-                # forward pass: combine forecasts and solve each newsvendor problem
-                comb_CDF = self.forward(batch_data[:-1])
-                
-                # estimate CRPS (heavyside function)
-                loss_i = [torch.square( comb_CDF[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
-                loss = sum(loss_i)/len(loss_i)
-
-                # Decomposition (see Online learning with the Continuous Ranked Probability Score for ensemble forecasting) 
-                #divergence_i = [(weights[j]*torch.norm(self.support - y_batch[i] )) for ]
-                
-                #loss_i = [weights[j]*torch.abs(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
-                #loss = sum(loss_i)/len(loss_i)
-                
-                # backward pass
-                loss.backward()
-                optimizer.step()                
-                
-                if (projection)and(self.apply_softmax != True):     
-                    lambda_hat.value = to_np(self.weights)
-                    proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
-                    with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
-                
-                running_loss += loss.item()
-            
-
-            L_t.append(to_np(self.weights).copy())
-            average_train_loss = running_loss / len(train_loader)
-            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
-
-            if average_train_loss < best_train_loss:
-                best_train_loss = average_train_loss
-                best_weights = copy.deepcopy(self.state_dict())
-                early_stopping_counter = 0
-                
-            else:
-                early_stopping_counter += 1
-                if early_stopping_counter >= patience:
-                    print("Early stopping triggered.")
-                    # recover best weights
-                    self.load_state_dict(best_weights)
-                    return
-
 def task_loss(pred, actual, problem, **kwargs):
     'Estimates task loss for different problems'
 
@@ -1055,8 +615,8 @@ aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col =
 target_problem = config['problem']
 
 row_counter = 0
-train_forecast_model = True
-initial_training = True
+train_forecast_model = False
+generate_forecasts = True
 
 Decision_cost = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linearpool_Decision_cost.csv', index_col = 0)
 QS_df = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linear_pool_QS.csv', index_col = 0)
@@ -1070,6 +630,30 @@ elif target_problem == 'reg_trad':
                                                    config['risk_aversion'])]
 
 #%%
+# Set up some problem parameters
+all_zones = [f'Z{i}' for i in range(1,11)]
+#target_zone = np.random.choice(all_zones)
+# number of forecasts to combine
+N_experts = config['N_experts']
+
+# number of observations to train prob. forecasting model
+N_sample = len(aggr_wind_df)//4
+
+step = .01
+y_supp = np.arange(0, 1+step, step).round(2)
+nlocations = len(y_supp)
+pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
+
+### Create train/test sets for all series
+
+trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[all_zones][config['start_date']:config['split_date']][:N_sample].round(2)
+comb_trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[all_zones][config['start_date']:config['split_date']][N_sample:].round(2)
+testY = aggr_wind_df.xs('POWER', axis=1, level=1)[all_zones][config['split_date']:].round(2)
+
+trainX_allzones = aggr_wind_df[all_zones][config['start_date']:config['split_date']][:N_sample].round(2)
+comb_trainX_allzones = aggr_wind_df[all_zones][config['start_date']:config['split_date']][N_sample:].round(2)    
+testX_allzones = aggr_wind_df[all_zones][config['split_date']:].round(2)
+
 for tup in tuple_list[row_counter:]:
 
     target_zone = tup[0]    
@@ -1077,347 +661,132 @@ for tup in tuple_list[row_counter:]:
     risk_aversion = tup[2]
     
     if row_counter == 0:
-        train_forecast_model = True
+        generate_forecasts = True
     elif (row_counter != 0) and (target_zone == tuple_list[row_counter-1][0]):    
-        train_forecast_model = False
+        generate_forecasts = False
     elif (row_counter != 0) and (target_zone != tuple_list[row_counter-1][0]):
-        train_forecast_model = True
-        
-    if initial_training:
-        train_forecast_model = True
-        initial_training = False
-        
-    all_zones = [f'Z{i}' for i in range(1,11)]
+        generate_forecasts = True
+            
     np.random.seed(row_counter)
     
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
     #target_zone = config['target_zone']
     #expert_zones = ['Z2', 'Z4', 'Z8', 'Z9']
+        
     
-    #target_zone = np.random.choice(all_zones)
-    # number of forecasts to combine
-    N_experts = config['N_experts']
+    expert_zones = all_zones.copy()
+    expert_zones.remove(target_zone)
+    expert_zones = expert_zones[:config['N_experts']]
+    #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
+    #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
+
+    ### Feature data for target location/zone 
+    local_features_df = aggr_wind_df[target_zone].copy()
+    local_features_df['wspeed10_sq'] = np.power(local_features_df['wspeed10'],2)
+    local_features_df['wspeed10_cb'] = np.power(local_features_df['wspeed10'],3)
+
+    local_features_df['wspeed100_sq'] = np.power(local_features_df['wspeed100'],2)
+    local_features_df['wspeed100_cb'] = np.power(local_features_df['wspeed100'],3)
     
-    # number of observations to train prob. forecasting model
-    N_sample = len(aggr_wind_df)//4
+    local_features_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']] = aggr_wind_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']]
     
-    step = .01
-    y_supp = np.arange(0, 1+step, step).round(2)
-    nlocations = len(y_supp)
-    pred_col = ['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']
+    local_feat = ['wspeed10', 'wspeed100', 'wdir10_rad', 'wdir100_rad', 'diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']
+    trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][:N_sample].round(2)
+    comb_trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][N_sample:].round(2)
+    testX_local = local_features_df[local_feat][config['split_date']:].round(2)
+
+    # supervised sets for experts    
+    #comb_trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)    
+    #trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
+    #testX_exp = aggr_wind_df[expert_zones][config['split_date']:].round(2)
+
+
+    # number of training observations for the combination model
+    n_obs = len(comb_trainY)
+    n_test_obs = len(testY)
     
     if train_forecast_model:
-        
-        expert_zones = all_zones.copy()
-        expert_zones.remove(target_zone)
-        expert_zones = expert_zones[:config['N_experts']]
-        #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
-        #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
-    
-        ### Create train/test sets for all series
-        
-        trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
-        comb_trainY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)
-        testY = aggr_wind_df.xs('POWER', axis=1, level=1)[[target_zone] + expert_zones][config['split_date']:].round(2)
-    
-        # feature data for target location/zone
-        
-        local_features_df = aggr_wind_df[target_zone].copy()
-        local_features_df['wspeed10_sq'] = np.power(local_features_df['wspeed10'],2)
-        local_features_df['wspeed10_cb'] = np.power(local_features_df['wspeed10'],3)
-    
-        local_features_df['wspeed100_sq'] = np.power(local_features_df['wspeed100'],2)
-        local_features_df['wspeed100_cb'] = np.power(local_features_df['wspeed100'],3)
-        
-        local_features_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']] = aggr_wind_df[['diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']]
-        
-        local_feat = ['wspeed10', 'wspeed100', 'wdir10_rad', 'wdir100_rad', 'diurnal_1', 'diurnal_2', 'diurnal_3', 'diurnal_4']
-        trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][:N_sample].round(2)
-        comd_trainX_local = local_features_df[local_feat][config['start_date']:config['split_date']][N_sample:].round(2)
-        testX_local = local_features_df[local_feat][config['split_date']:].round(2)
-    
-        # supervised sets for experts    
-        trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][:N_sample].round(2)
-        comb_trainX_exp = aggr_wind_df[expert_zones][config['start_date']:config['split_date']][N_sample:].round(2)
-        testX_exp = aggr_wind_df[expert_zones][config['split_date']:].round(2)
-    
-        # number of training observations for the combination model
-        n_obs = len(comb_trainY)
-        n_test_obs = len(testY)
-    
         #% Train experts, i.e., probabilistic forecasting models in adjacent locations    
-        prob_models = []
-        for i, zone in enumerate(expert_zones[:N_experts]):
-            print(f'Training model {i}')
+        prob_models = {}
+        
+        for i, zone in enumerate(all_zones):
+            print(f'Training model for zone:{zone}')
+                     
+            temp_model = EnsemblePrescriptiveTree(n_estimators = 50, 
+                                                  max_features = len(pred_col), type_split = 'quant' )
+            temp_model.fit(trainX_allzones[zone][pred_col].values, trainY[zone].values,
+                           quant = np.arange(.01, 1, .01), problem = 'mse') 
             
-            #temp_model = EnsemblePrescriptiveTree_OOB(n_estimators = 10, max_features = 1, type_split = 'quant')
-            #temp_model.fit(trainX_exp[zone][pred_col].values.round(2), trainY[zone].values, y_supp, y_supp, bootstrap = False, quant = np.arange(.01, 1, .01), problem = 'mse') 
-         
-            temp_model = EnsemblePrescriptiveTree(n_estimators = 30, max_features = len(pred_col), type_split = 'quant' )
-            temp_model.fit(trainX_exp[zone][pred_col].values, trainY[zone].values, quant = np.arange(.01, 1, .01), problem = 'mse') 
-            prob_models.append(temp_model)
+            prob_models[zone] = temp_model
         
-        #% Generate predictions for training/test set for forecast combination
-        # find local weights for meta-training set/ map weights to support locations
-        print('Generating prob. forecasts for train/test set...')
-        
-        train_w_list = []
-        train_p_list = []
-        for i, p in enumerate(expert_zones[:N_experts]):
-            train_w_list.append(prob_models[i].find_weights(comb_trainX_exp[p][pred_col].values, trainX_exp[p][pred_col].values))
-            train_p_list.append(wemp_to_support(train_w_list[i], trainY[p].values, y_supp))
-            
-        test_w_list = []
-        test_p_list = []
-        for i, p in enumerate(expert_zones[:N_experts]):
-            test_w_list.append(prob_models[i].find_weights(testX_exp[p][pred_col].values, trainX_exp[p][pred_col].values))
-            test_p_list.append(wemp_to_support(test_w_list[i], trainY[p].values, y_supp))
-            
-        #% Visualize some prob. forecasts
-        #%
-        # step 1: find inverted CDFs
-        F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j in range(N_experts)]
-        
-        plt.plot(comb_trainY[target_zone][200:300])
-        for i in [0,2]:
-            #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
-            
-            plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3)
-        plt.show()
-    
-        ### Define the rest of the supervised learning parameters     
-        # projection step (used for gradient-based methods)
-        
-        #y_proj = cp.Variable(N_experts)
-        #y_hat = cp.Parameter(N_experts)
-        #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
-        
-        train_targetY = comb_trainY[target_zone].values.reshape(-1)
-        
-        # Supervised learning set as tensors for PyTorch
-        tensor_trainY = torch.FloatTensor(train_targetY)
-        tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
-        tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(N_experts)]
-        
-        feat_scaler = MinMaxScaler()
-        feat_scaler.fit(comd_trainX_local)
-        tensor_trainX = torch.FloatTensor(feat_scaler.transform(comd_trainX_local))
-        tensor_testX = torch.FloatTensor(feat_scaler.transform(testX_local))
-        
-        train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
-        
-        
-        n_train_obs = len(train_targetY)
-        n_test_obs = len(testY)
-    
-    if target_problem == 'mse':
-        
-        #### Solve to optimality with a single level problem
-        # 1-1 mapping: decisions are the weighted sum
-        
-        # set up the SAA of the target optimization problem
-        m = gp.Model()
-        #m.setParam('OutputFlag', 1)
-        # Decision variables
-        
-        lambda_coord = m.addMVar(N_experts, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-        p_comb = m.addMVar((n_obs, nlocations), vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-        z = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-        m.addConstr( lambda_coord.sum() == 1)
-        # constraints on probability
-        m.addConstr( p_comb.sum(1) == 1)
-        m.addConstr( p_comb == sum([lambda_coord[i]*train_p_list[i] for i in range(N_experts)]))
-        
-        # mapping probability vectors to decisions (replace with trained ML predictor for more complex problems)
-        m.addConstr( z == p_comb@y_supp)
-        
-        # Task-loss function
-        m.setObjective( (train_targetY-z)@(train_targetY-z), gp.GRB.MINIMIZE)
-        m.optimize()
-    
-        #### Solve with Diff. Opt. Layer (should converge to the same solution as above)
-        k = len(y_supp)
-        print(np.linalg.norm((train_targetY-z.X)))
-        
-        #%
-        ################## Pytorch example    
-        patience = 25
-        batch_size = 100
-        num_epochs = 100
-        
-        train_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-        #convex_layer = ConvexCombinationLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
-        
-        
-        # Forward pass through the layer with 3 inputs
-        optimizer = torch.optim.SGD(convex_layer.parameters(), lr=1e-3)
-        Projection = True
-        L_t = []
-        for epoch in range(num_epochs):
-            # activate train functionality
-            convex_layer.train()
-            running_loss = 0.0
-            # sample batch
-            for batch_data in train_loader:
-                
-                y_batch = batch_data[-1]
-                
-                # clear gradients
-                optimizer.zero_grad()
-                # forward pass
-                z_hat = convex_layer(batch_data[0], batch_data[1], batch_data[2])
-                
-                # loss evaluation
-                loss = (z_hat - y_batch).norm()
-                
-                # backward pass
-                loss.backward()
-                optimizer.step()
-                
-            # Projection step (!!!! enforce no gradient update)
-            #with torch.no_grad():
-            #    convex_layer.weights.copy_ = nn.Softmax(dim=-1)(convex_layer.weights)
-                
-            if Projection:     
-                y_hat.value = to_np(convex_layer.weights)
-                proj_problem.solve(solver = 'GUROBI')
-                # update parameter values
-                with torch.no_grad():
-                    convex_layer.weights.copy_(torch.FloatTensor(y_proj.value))
-                        
-                running_loss += loss.item()
-            
-    
-            L_t.append(to_np(convex_layer.weights).copy())
-            
-            if epoch % 15 ==0:
-                plt.plot(L_t)
-                plt.show()
-            average_train_loss = running_loss / len(train_loader)
-            
-            with torch.no_grad():            
-                y_prediction = convex_layer(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2])
-    
-            
-            print( ( tensor_trainY - y_prediction ).norm() )
-            
-            print(f"Epoch [{epoch + 1}/{num_epochs}] - Train Loss: {average_train_loss:.4f} ")
-        
-        #%
-        z = cp.Variable(1)
-        lambda_ = cp.Parameter(N_experts)
-        x_i = cp.Parameter((1, tensor_train_p_list.shape[1]))
-        x_i_aux = cp.Variable((1, tensor_train_p_list.shape[1]))
-        
-        constraints = [z >= 0, z <=1, z == sum([lambda_[i]*x_i_aux[:,i*k:(i+1)*k] for i in range(N_experts)])@y_supp, 
-                       x_i == x_i_aux]
-        
-        # analytical solution
-        objective = cp.Minimize(0)
-        problem = cp.Problem(objective, constraints)
-        
-        Comb_Layer = CvxpyLayer(problem, parameters=[lambda_, x_i], variables=[z, x_i_aux])
-        
-        l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
-    
-        optimizer = torch.optim.Adam([l_hat], lr=1e-3)
-    
-        for epoch in range(num_epochs):
-            # activate train functionality
-            Comb_Layer.train()
-            running_loss = 0.0
-            # sample batch
-            for inputs, labels in train_loader:
-                
-                # clear gradients
-                optimizer.zero_grad()
-                # forward pass
-                outputs = Comb_Layer(l_hat, inputs)
-                z_hat = outputs[0]
-                
-                # loss evaluation
-                loss = (labels-z_hat).norm()
-    
-                # backward pass
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item()
-    
-    
-            
-        #%
-        ################## GD for differentiable layer
-        # As currently written, does full batch gradient updates/ probably eats a lot of memory
-        
-        z = cp.Variable(n_obs)
-        lambda_ = cp.Parameter(N_experts)
-        constraints = [z >= 0, z <=1, z == sum([lambda_[i]*train_p_list[i] for i in range(N_experts)])@y_supp]
-        
-        objective = cp.Minimize(cp.norm(train_targetY - z, p=2))
-        problem = cp.Problem(objective, constraints)
-        
-        layer = CvxpyLayer(problem, parameters=[lambda_], variables=[z,])
-        l_hat = nn.Parameter(torch.FloatTensor((1/N_experts)*np.ones(N_experts)).requires_grad_())
-        opt = torch.optim.SGD([l_hat], lr=1e-3)
-        losses = []
-        
-        L_t = [to_np(l_hat)]
-        Projection = False
-        
-        layer.train()
-        for i in range(num_epochs):
-                
-            # Forward pass: solve optimization problem
-            zhat, = layer(l_hat)
-            np_zhat = to_np(zhat)
-            
-            #assert(np_zhat.min()>=0)
-            assert(np_zhat.max()<=1)
-            
-            # Estimate model loss
-            loss = (zhat - nn.Parameter(torch.FloatTensor(train_targetY))).norm()
-            losses.append(to_np(loss))
-            
-        
-            # gradients and parameter update            
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-              
-            
-            if Projection:     
-                y_hat.value = to_np(l_hat)
-                proj_problem.solve(solver = 'GUROBI')
-                # update parameter values
-                
-                with torch.no_grad():
-                    l_hat.copy_(torch.FloatTensor(y_proj.value))
-            
-            L_t.append(to_np(l_hat))
-        
-            if i%10==0:
-                print(l_hat)
-                
-                plt.plot(losses)
-                plt.show()
-    
-        # Derive test predictions, evaluate models
-    
-        y_hat_local = [lambda_coord[i].X*test_p_list[i]@y_supp for i in range(N_experts)]
-        y_hat_comb = sum([lambda_coord[i].X*test_p_list[i] for i in range(N_experts)])@y_supp
-        
-        for i in range(N_experts):
-            print(f'Model {i}:{eval_point_pred(y_hat_local[i], testY[target_zone])[0]}')
-        print(f'ConvComb:{eval_point_pred(y_hat_comb, testY[target_zone])[0]}')
-        print(f'Ave:{eval_point_pred(sum(y_hat_local)/N_experts, testY[target_zone])[0]}')
+        pickle.dump(prob_models, open(f'{cd}\\results\\prob_forecast_models.sav', 'wb'))
+    else:
+        # load the model from disk
+        prob_models = pickle.load(open(f'{cd}\\results\\prob_forecast_models.sav', 'rb'))
 
-#% Newsvendor experiment
-#%%
+    #% Generate predictions for training/test set for forecast combination
+    # find local weights for meta-training set/ map weights to support locations
+    print('Generating prob. forecasts for train/test set...')
+    
+    train_w_list = []
+    train_p_list = []
+    for i, zone in enumerate(expert_zones[:N_experts]):
+        train_w_list.append(prob_models[zone].find_weights(comb_trainX_allzones[zone][pred_col].values, 
+                                                           trainX_allzones[zone][pred_col].values))
+        train_p_list.append(wemp_to_support(train_w_list[i], trainY[zone].values, y_supp))
+        
+    test_w_list = []
+    test_p_list = []
+    for i, zone in enumerate(expert_zones[:N_experts]):
+        test_w_list.append(prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
+                                                          trainX_allzones[zone][pred_col].values))
+        test_p_list.append(wemp_to_support(test_w_list[i], trainY[zone].values, y_supp))
+        
+    #% Visualize some prob. forecasts
+    #%
+    # step 1: find inverted CDFs
+    F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j,zone in enumerate(expert_zones)]
+    
+    plt.plot(comb_trainY[target_zone][200:300])
+    for i in [0,2]:
+        #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
+        
+        plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3)
+    plt.show()
+    
+    ### Define the rest of the supervised learning parameters     
+    # projection step (used for gradient-based methods)
+    
+    #y_proj = cp.Variable(N_experts)
+    #y_hat = cp.Parameter(N_experts)
+    #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
+    
+    train_targetY = comb_trainY[target_zone].values.reshape(-1)
+    
+    # Supervised learning set as tensors for PyTorch
+    tensor_trainY = torch.FloatTensor(train_targetY[:-800])
+    tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
+    tensor_train_p_list = [torch.FloatTensor(train_p_list[i][:-800]) for i in range(N_experts)]
+
+    tensor_validY = torch.FloatTensor(train_targetY[-800:])
+    tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-800:]) for i in range(N_experts)]
+    
+    feat_scaler = MinMaxScaler()
+    feat_scaler.fit(comb_trainX_local)
+    
+    tensor_trainX = torch.FloatTensor(feat_scaler.transform(comb_trainX_local[:-800]))
+    tensor_validX = torch.FloatTensor(feat_scaler.transform(comb_trainX_local[-800:]))
+    tensor_testX = torch.FloatTensor(feat_scaler.transform(testX_local))
+    
+    train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
+    
+    n_train_obs = len(train_targetY)
+    n_test_obs = len(testY)
+    
+
     if target_problem in ['newsvendor', 'reg_trad']:
                 
         ###########% Static forecast combinations
-        
         lambda_cc_dict = {}
         
         for i in range(N_experts):
@@ -1431,29 +800,30 @@ for tup in tuple_list[row_counter:]:
         lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, train_p_list, problem = target_problem,
                                                      crit_quant = critical_fractile, 
                                                      support = y_supp, risk_aversion = risk_aversion)
-        #%%
+        
         # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
         lambda_ = averaging_decisions(train_targetY, train_p_list, target_problem, crit_fract = critical_fractile,
                                       support = y_supp, bounds = False, risk_aversion = risk_aversion)
 
         lambda_cc_dict['Insample'] = lambda_tuned_inv    
         lambda_cc_dict['SalvaBench'] = lambda_
-        #%%        
+        
         #% PyTorch layers
                 
-        patience = 15
-        batch_size = 2000
+        patience = 10
+        batch_size = 1024
         num_epochs = 1000
-        learning_rate = 5e-2
+        learning_rate = 1e-2
         apply_softmax = True
         
-        train_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+        train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+        valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
                 
         #### CRPS minimization/ with torch layer
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                apply_softmax = True)
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-        lpool_crps_model.train_model(train_loader, optimizer, epochs = batch_size, patience = patience, 
+        lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
                                      projection = True)
         if apply_softmax:
             lambda_cc_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
@@ -1471,7 +841,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
             
-            lpool_newsv_model.train_model(train_loader, optimizer, epochs = num_epochs, 
+            lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
                                               patience = patience, projection = False)
             if apply_softmax:
                 lambda_cc_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
@@ -1486,10 +856,42 @@ for tup in tuple_list[row_counter:]:
         plt.show()
         #%%
         ### Adaptive combination model
+        
+        # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
+        # iv) create one for CRPS only (gamma == +inf)
+        
+        train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
+        valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size)
+        
+        trainZopt = np.zeros((n_train_obs, len(train_p_list)))
+        testZopt = np.zeros((n_test_obs, len(test_p_list)))
+        
+        for j in range(N_experts):
+            temp_z_opt = solve_opt_prob(support, train_p_list[j], target_problem, risk_aversion = risk_aversion, crit_quant = crit)
+            trainZopt[:,j] = temp_z_opt
+
+            temp_z_opt = solve_opt_prob(support, test_p_list[j], target_problem, risk_aversion = risk_aversion, crit_quant = crit)
+            testZopt[:,j] = temp_z_opt
+        
+        tensor_trainZopt = torch.FloatTensor(trainZopt[:-800])
+        tensor_validZopt = torch.FloatTensor(trainZopt[-800:])
+        tensor_testZopt = torch.FloatTensor(testZopt)
+        
+        lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
+        optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)        
+        lr_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
+                                          patience = patience, projection = False)
+
+        mlp_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], output_size = N_experts, support = torch.FloatTensor(y_supp))        
+        optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)        
+        mlp_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
+                                          patience = patience, projection = False)
+
+
         '''
         train_adaptive_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
         
-        lr_adapt_Newsv_Comb_Model = AdaptiveCombNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
+        lr_adapt_Newsv_Comb_Model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
                                                                 support = torch.FloatTensor(y_supp), gamma = 0, apply_softmax = True)
         
         optimizer = torch.optim.SGD(lr_adapt_Newsv_Comb_Model.parameters(), lr = learning_rate)
