@@ -799,9 +799,10 @@ for tup in tuple_list[row_counter:]:
         patience = 10
         batch_size = 1024
         num_epochs = 1000
-        learning_rate = 1e-3
+        learning_rate = 1e-2
         apply_softmax = True
         #%%
+        '''
         train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
         valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
                 
@@ -812,7 +813,7 @@ for tup in tuple_list[row_counter:]:
         lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
                                      projection = True)
         #%%
-        '''
+        
         if apply_softmax:
             lambda_cc_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
         else:
