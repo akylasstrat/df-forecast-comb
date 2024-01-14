@@ -48,24 +48,25 @@ plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
-def averaging_decisions(target_y, prob_vectors, problem, 
+def averaging_decisions(target_y, train_z_opt, problem, 
                         crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0, 
                         **kwargs):            
     ''' (Salva's benchmark) Solve the stochastic problem in-sample for each observations and each expert, combine the decisions'''
 
-    n_obs = prob_vectors[0].shape[0]
-    n_models = len(prob_vectors)
+    n_obs = train_z_opt.shape[0]
+    n_models = train_z_opt.shape[1]
     risk_aversion = kwargs['risk_aversion']
 
     ### Find optimal decisions under perfect foresight information
     
     print('Solve in-sample stchastic problems...')
     
-    z_opt = np.zeros((n_obs, n_models))
+    #z_opt = np.zeros((n_obs, n_models))
     insample_cost = np.zeros(n_models)
     insample_inverse_cost = np.zeros(n_models)
     
     for j in range(n_models):
+        '''
         if problem == 'newsvendor':
             for i in range(n_obs):
                 # Solve stochastic problem, find decision
@@ -75,14 +76,9 @@ def averaging_decisions(target_y, prob_vectors, problem,
             temp_z_opt = solve_opt_prob(support, prob_vectors[j], problem, risk_aversion = risk_aversion, 
                                         crit_quant = crit_fract)
             z_opt[:,j] = temp_z_opt
+        '''
         
-        #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
-        insample_cost[j] = task_loss(z_opt[:,j], target_y.reshape(-1), problem, crit_quant = crit_fract, 
-                                     risk_aversion = risk_aversion)
-        insample_inverse_cost[j] = 1/insample_cost[j]
-    
-    #### set optimization problem
-    
+    #### set optimization problem    
     m = gp.Model()
     if verbose == 0: 
         m.setParam('OutputFlag', 0)
@@ -97,7 +93,7 @@ def averaging_decisions(target_y, prob_vectors, problem,
 
     m.addConstr( lambdas.sum() == 1)
     
-    m.addConstr( z_comb == sum([z_opt[:,j]*lambdas[j] for j in range(n_models)]) )
+    m.addConstr( z_comb == sum([train_z_opt[:,j]*lambdas[j] for j in range(n_models)]) )
     
     # Task-loss function
     m.addConstr( error == target_y - z_comb)
@@ -357,7 +353,7 @@ def tree_params():
 
 from torch.utils.data import Dataset, DataLoader
 
-def insample_weight_tuning(target_y, prob_vectors, problem = 'newsvendor', 
+def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
         set weights based on inverse cost (or could use softmax activation)
@@ -369,8 +365,8 @@ def insample_weight_tuning(target_y, prob_vectors, problem = 'newsvendor',
         - Output:
             lambdas_inv: weights based on inverse in-sample performance'''
     
-    n_obs = prob_vectors[0].shape[0]
-    n_models = len(prob_vectors)
+    n_obs = train_z_opt
+    n_models = train_z_opt.shape[1]
     
     risk_aversion = kwargs['risk_aversion']
     crit_quant = kwargs['crit_quant']
@@ -378,11 +374,12 @@ def insample_weight_tuning(target_y, prob_vectors, problem = 'newsvendor',
     
     print('Solve in-sample stochastic problems...')
     
-    z_opt = np.zeros((n_obs, n_models))
+    #z_opt = np.zeros((n_obs, n_models))
     insample_cost = np.zeros((n_models))
     insample_inverse_cost = np.zeros((n_models))
 
     for j in range(n_models):
+        '''
         if problem == 'newsvendor':
             for i in range(n_obs):
                 # Solve stochastic problem, find decision
@@ -395,9 +392,9 @@ def insample_weight_tuning(target_y, prob_vectors, problem = 'newsvendor',
             temp_z_opt = solve_opt_prob(support, temp_w_mat, problem, risk_aversion = risk_aversion, 
                                         crit_quant = crit_quant)
             z_opt[:,j] = temp_z_opt
-        
+        '''
         #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
-        insample_cost[j] = task_loss(z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
+        insample_cost[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
                                      crit_quant = crit_quant)
         insample_inverse_cost[j] = 1/insample_cost[j]
 
@@ -567,6 +564,15 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
         
         return offer.X        
 
+def nn_params():
+    'NN hyperparameters'
+    nn_params = {}
+    nn_params['patience'] = 10
+    nn_params['batch_size'] = 1024
+    nn_params['num_epochs'] = 1000
+    nn_params['learning_rate'] = 5e-3
+    nn_params['apply_softmax'] = True
+    return nn_params
 
 def params():
     ''' Set up the experiment parameters'''
@@ -577,8 +583,11 @@ def params():
     params['split_date'] = '2013-01-01' # Defines train/test split
     params['end_date'] = '2013-12-30'
     
+<<<<<<< HEAD
     params['save'] = True # If True, then saves models and results
-    params['train_brc'] = False # If True, then saves models and results
+=======
+    params['save'] = False # If True, then saves models and results
+>>>>>>> d41bd43 (updating results)
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad}
@@ -601,6 +610,7 @@ def params():
 #%%
 config = params()
 hyperparam = tree_params()
+nn_hparam = nn_params()
 
 results_path = f'{cd}\\results'
 data_path = f'{cd}\\data'
@@ -612,13 +622,15 @@ aggr_wind_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col =
 
 target_problem = config['problem']
 
-row_counter = 0
 train_forecast_model = False
 generate_forecasts = True
 
-#Decision_cost = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linearpool_Decision_cost.csv', index_col = 0)
-#QS_df = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linear_pool_QS.csv', index_col = 0)
-#row_counter = len(Decision_cost)
+try:
+    Decision_cost = pd.read_csv(f'{cd}\\results\\{target_problem}_total_linearpool_Decision_cost.csv', index_col = 0)
+    QS_df = pd.read_csv(f'{cd}\\results\\{target_problem}_total_linear_pool_QS.csv', index_col = 0)
+    row_counter = len(Decision_cost)
+except: 
+    row_counter = 0
 
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
@@ -651,6 +663,13 @@ testY = aggr_wind_df.xs('POWER', axis=1, level=1)[all_zones][config['split_date'
 trainX_allzones = aggr_wind_df[all_zones][config['start_date']:config['split_date']][:N_sample].round(2)
 comb_trainX_allzones = aggr_wind_df[all_zones][config['start_date']:config['split_date']][N_sample:].round(2)    
 testX_allzones = aggr_wind_df[all_zones][config['split_date']:].round(2)
+
+### NN hyperparameters
+patience = nn_hparam['patience']
+batch_size = nn_hparam['batch_size']
+num_epochs = nn_hparam['num_epochs']
+learning_rate = nn_hparam['learning_rate']
+apply_softmax = nn_hparam['apply_softmax']
 
 for tup in tuple_list[row_counter:]:
 
@@ -721,29 +740,60 @@ for tup in tuple_list[row_counter:]:
     else:
         # load the model from disk
         prob_models = pickle.load(open(f'{cd}\\results\\prob_forecast_models.sav', 'rb'))
-
+    #%%
     #% Generate predictions for training/test set for forecast combination
     # find local weights for meta-training set/ map weights to support locations
-    print('Generating prob. forecasts for train/test set...')
+<<<<<<< HEAD
+    if ('train_w_dict' not in locals()) or ('test_w_dict' not in locals()):
+        print('Generating prob. forecasts for train/test set...')
+        train_w_dict = {}
+        test_w_dict = {}
+=======
+    if generate_forecasts == True:
+        print('Generating prob. forecasts for train/test set...')
+        train_w_dict = {}
+        test_w_list = {}
+>>>>>>> d41bd43 (updating results)
+        
+        for i, zone in enumerate(all_zones):
+            train_w_dict[zone] = prob_models[zone].find_weights(comb_trainX_allzones[zone][pred_col].values, 
+                                                               trainX_allzones[zone][pred_col].values) 
+<<<<<<< HEAD
+            test_w_dict[zone] = prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
+                                                              trainX_allzones[zone][pred_col].values)
+
+        #pickle.dump(train_w_dict, open(f'{cd}\\results\\train_w_dict.sav', 'wb'))
+        #pickle.dump(test_w_list, open(f'{cd}\\results\\test_w_dict.sav', 'wb'))
+    #%%
+=======
+            test_w_list[zone] = prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
+                                                              trainX_allzones[zone][pred_col].values)
+
+        generate_forecasts = False
+        #pickle.dump(train_w_dict, open(f'{cd}\\results\\train_w_dict.sav', 'wb'))
+        #pickle.dump(test_w_list, open(f'{cd}\\results\\test_w_dict.sav', 'wb'))
     
-    train_w_list = []
+>>>>>>> d41bd43 (updating results)
+    # Translate weighted observations to discrete PDFs
     train_p_list = []
-    for i, zone in enumerate(expert_zones[:N_experts]):
-        train_w_list.append(prob_models[zone].find_weights(comb_trainX_allzones[zone][pred_col].values, 
-                                                           trainX_allzones[zone][pred_col].values))
-        train_p_list.append(wemp_to_support(train_w_list[i], trainY[zone].values, y_supp))
-        
-    test_w_list = []
     test_p_list = []
-    for i, zone in enumerate(expert_zones[:N_experts]):
-        test_w_list.append(prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
-                                                          trainX_allzones[zone][pred_col].values))
+    
+    for i, zone in enumerate(all_zones):
+        if zone == target_zone: continue
+<<<<<<< HEAD
+        train_p_list.append(wemp_to_support(train_w_dict[zone], trainY[zone].values, y_supp))
+        test_p_list.append(wemp_to_support(test_w_dict[zone], trainY[zone].values, y_supp))
+=======
+    
+        train_p_list.append(wemp_to_support(train_w_list[i], trainY[zone].values, y_supp))
         test_p_list.append(wemp_to_support(test_w_list[i], trainY[zone].values, y_supp))
-        
+>>>>>>> d41bd43 (updating results)
+
+
     #% Visualize some prob. forecasts
     #%
     # step 1: find inverted CDFs
-    F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j,zone in enumerate(expert_zones)]
+    F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_dict[zone][i]) for i in range(500)]) for j,zone in enumerate(expert_zones)]
     
     plt.plot(comb_trainY[target_zone][200:300])
     for i in [0,2]:
@@ -781,28 +831,44 @@ for tup in tuple_list[row_counter:]:
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
     
-
+    #%%
     if target_problem in ['newsvendor', 'reg_trad']:
-                
+        
+        trainZopt = np.zeros((n_train_obs, len(train_p_list)))
+        testZopt = np.zeros((n_test_obs, len(test_p_list)))
+        
+        print('Finding optimal decisions in training set')
+        for j in range(N_experts):
+            temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, 
+                                        crit_quant = critical_fractile)
+            trainZopt[:,j] = temp_z_opt
+#%%
         ###########% Static forecast combinations
-        lambda_cc_dict = {}
+        lambda_static_dict = {}
         
         for i in range(N_experts):
             temp_ind = np.zeros(N_experts)
             temp_ind[i] = 1
-            lambda_cc_dict[f'Model-{i}'] = temp_ind
+            lambda_static_dict[f'Model-{i}'] = temp_ind
             
-        lambda_cc_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
+        lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
+        
+        # Set weights to in-sample performance
+        lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, problem = target_problem,
+                                                     crit_quant = critical_fractile, 
+                                                     support = y_supp, risk_aversion = risk_aversion)
+        
+        # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
+        lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile,
+                                      support = y_supp, bounds = False, risk_aversion = risk_aversion)
+
+        lambda_static_dict['Insample'] = lambda_tuned_inv    
+        lambda_static_dict['SalvaBench'] = lambda_
+
+
         #% PyTorch layers
-                
-        patience = 10
-        batch_size = 1024
-        num_epochs = 1000
-        learning_rate = 1e-2
-        apply_softmax = True
-        #%%
-        '''
+        
         train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
         valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
                 
@@ -812,17 +878,14 @@ for tup in tuple_list[row_counter:]:
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
         lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
                                      projection = True)
-        #%%
         
         if apply_softmax:
-            lambda_cc_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
+            lambda_static_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
         else:
-            lambda_cc_dict['CRPS'] = to_np(lpool_crps_model.weights)
+            lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
 
-        #%%
-        ##### Decision-focused combination for different values of gamma
-        
-        for gamma in [0, 0.1, 1, 10]:
+        ##### Decision-focused combination for different values of gamma        
+        for gamma in [0, 0.1, 1]:
             
             lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
                                                         gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion,
@@ -833,18 +896,18 @@ for tup in tuple_list[row_counter:]:
             lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
                                               patience = patience, projection = False)
             if apply_softmax:
-                lambda_cc_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+                lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
             else:
-                lambda_cc_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
+                lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
                 
-        print(lambda_cc_dict)
-        #%%
-        for m in list(lambda_cc_dict.keys())[N_experts:]:
-            plt.plot(lambda_cc_dict[m], label = m)
+        print(lambda_static_dict)
+        
+        for m in list(lambda_static_dict.keys())[N_experts:]:
+            plt.plot(lambda_static_dict[m], label = m)
         plt.legend()
         plt.show()
-        '''
-        #%%
+        
+        
         ### Adaptive combination model
         
         # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
@@ -852,23 +915,11 @@ for tup in tuple_list[row_counter:]:
         
         train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
         valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size)
-        
-        trainZopt = np.zeros((n_train_obs, len(train_p_list)))
-        testZopt = np.zeros((n_test_obs, len(test_p_list)))
-        
-        print('Finding optimal decisions in training set')
-        for j in range(N_experts):
-            temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, 
-                                        crit_quant = critical_fractile)
-            trainZopt[:,j] = temp_z_opt
-
-            #temp_z_opt = solve_opt_prob(support, test_p_list[j], target_problem, risk_aversion = risk_aversion, crit_quant = crit)
-            #testZopt[:,j] = temp_z_opt
-        
+                
         tensor_trainZopt = torch.FloatTensor(trainZopt[:-800])
         tensor_validZopt = torch.FloatTensor(trainZopt[-800:])
         tensor_testZopt = torch.FloatTensor(testZopt)
-        #%%
+        
         from torch_layers_functions import *
         adaptive_models_dict = {}
         
@@ -890,7 +941,7 @@ for tup in tuple_list[row_counter:]:
 
         adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
         
-        #%%
+        
         
         ### Decision Combination/ LR
         train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
@@ -912,14 +963,14 @@ for tup in tuple_list[row_counter:]:
 
         adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
         
-        #%%
+        
         for gamma in [1]:
                         
             lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
                                                                      risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 5e-3)
+            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = learning_rate)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
                                                   optimizer, epochs = 1000, patience = patience, projection = False)
             
@@ -937,56 +988,55 @@ for tup in tuple_list[row_counter:]:
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
 
 
-        #%%
+        
         # turn probability vectors to decisions/ closed-form solution for newsvendor problem    
-        models = list(adaptive_models_dict.keys())
+        static_models = list(lambda_static_dict) 
+        adaptive_models = list(adaptive_models_dict.keys())
+        all_models = static_models + adaptive_models
+        
         lambda_adapt_dict = {}
-        Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(models))), columns = models)
-
-        for j, m in enumerate(models):
-            # For each model, predict combination weights
-            lambda_adapt_dict[m] = adaptive_models_dict[m].predict_weights(tensor_testX)
-
-            # Combine PDFs for each observation
-            temp_pdf = np.array([sum([lambda_adapt_dict[m][i,j]*test_p_list[j][i] for j in range(N_experts)]) for i in range(n_test_obs)])    
-
-            temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion, 
-                                                crit_quant = critical_fractile)
-            
-            Prescriptions[m] = temp_prescriptions
-                
-            #!!!!!! Add estimation of quantile loss or CRPS over the whole grid
-        #%%
+        Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
+        
+        # Store pinball loss and Decision cost for task-loss
         temp_QS = pd.DataFrame()
         temp_QS['Target'] = [target_zone]
         temp_QS['risk_aversion'] = risk_aversion
-
+        
         temp_Decision_cost = pd.DataFrame()
         temp_Decision_cost['Quantile'] = [critical_fractile]
         temp_Decision_cost['risk_aversion'] = risk_aversion
         temp_Decision_cost['Target'] = target_zone
 
-        for m in models:
-            print(f'{m}:{100*newsvendor_loss(Prescriptions[m].values, testY[target_zone], q = critical_fractile).round(4)}')
-            
-            temp_Decision_cost[m] = 100*newsvendor_loss(Prescriptions[m].values, testY[target_zone], q = critical_fractile).round(4)
-
-        # Evalaute QS (approximates CRPS)
         target_quant = np.arange(0.1, 1, 0.1).round(2)
-        
-        for j, m in enumerate(models):
 
-            # Combine PDFs for each observation
-            temp_pdf = np.array([sum([lambda_adapt_dict[m][i,j]*test_p_list[j][i] for j in range(N_experts)]) for i in range(n_test_obs)])    
+        for j, m in enumerate(all_models):
+            if m in static_models:                
+                # Combine PDFs for each observation
+                temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
+            elif m in adaptive_models:
+                # For each model, predict combination weights
+                lambda_adapt_dict[m] = adaptive_models_dict[m].predict_weights(tensor_testX)
+                # Combine PDFs for each observation
+                temp_pdf = np.array([sum([lambda_adapt_dict[m][i,j]*test_p_list[j][i] for j in range(N_experts)]) for i in range(n_test_obs)])    
 
-            # find quantile forecasts
-            temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])
+            temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion, 
+                                                crit_quant = critical_fractile)
+               
+            Prescriptions[m] = temp_prescriptions
+                
+            # Estimate task-loss for specific model
+            temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY[target_zone].values, 
+                                              target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+            print(f'{m}:{temp_Decision_cost[m].values.round(4)}')
             
+            # Evaluate QS (approximation of CRPS) for each model
+            # find quantile forecasts
+            temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
             temp_qs = 100*pinball(temp_q_forecast, testY[target_zone].values, target_quant).round(4)
             
             temp_QS[m] = [temp_qs]
             
-            if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1', 'DF_10']:
+            if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
                 plt.plot(temp_qs, label = m)
         plt.legend()
         plt.ylabel('Pinball loss')
@@ -1004,9 +1054,16 @@ for tup in tuple_list[row_counter:]:
             QS_df = temp_QS.copy()
         else:
             QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
-            
-        Decision_cost.to_csv(f'{cd}\\results\\{target_problem}_adaptive_linearpool_Decision_cost.csv')
-        QS_df.to_csv(f'{cd}\\results\\{target_problem}_adaptive_linear_pool_QS.csv')
+        
+        if config['save']:
+<<<<<<< HEAD
+            Decision_cost.to_csv(f'{cd}\\results\\{target_problem}_total_linearpool_Decision_cost.csv')
+            QS_df.to_csv(f'{cd}\\results\\{target_problem}_total_linear_pool_QS.csv')
+            Prescriptions.to_csv(f'{cd}\\results\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+=======
+            Decision_cost.to_csv(f'{cd}\\results\\{target_problem}_adaptive_linearpool_Decision_cost.csv')
+            QS_df.to_csv(f'{cd}\\results\\{target_problem}_adaptive_linear_pool_QS.csv')
+>>>>>>> d41bd43 (updating results)
         
         row_counter += 1
         
@@ -1022,3 +1079,11 @@ for tup in tuple_list[row_counter:]:
         #Prescriptions['BRC-DT'] = np.array([inverted_cdf([critical_fractile], y_supp, p_brc_dt[i]) for i in range(len(test_localY))]).reshape(-1)
             
         
+#%%
+mean_QS_df = Decision_cost.copy()
+
+for m in models:
+    for i in range(mean_QS_df[m].shape[0]):
+        mean_QS_df[m].iloc[i] = QS_df[m].iloc[i].mean()
+
+

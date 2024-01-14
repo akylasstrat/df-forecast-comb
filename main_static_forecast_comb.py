@@ -579,8 +579,7 @@ def params():
     params['split_date'] = '2013-01-01' # Defines train/test split
     params['end_date'] = '2013-12-30'
     
-    params['save'] = True # If True, then saves models and results
-    params['train_brc'] = False # If True, then saves models and results
+    params['save'] = False # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad}
@@ -618,9 +617,9 @@ row_counter = 0
 train_forecast_model = False
 generate_forecasts = True
 
-Decision_cost = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linearpool_Decision_cost.csv', index_col = 0)
-QS_df = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linear_pool_QS.csv', index_col = 0)
-row_counter = len(Decision_cost)
+#Decision_cost = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linearpool_Decision_cost.csv', index_col = 0)
+#QS_df = pd.read_csv(f'{cd}\\results\\{target_problem}_static_linear_pool_QS.csv', index_col = 0)
+#row_counter = len(Decision_cost)
 
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
@@ -660,13 +659,14 @@ for tup in tuple_list[row_counter:]:
     critical_fractile = tup[1]
     risk_aversion = tup[2]
     
+    '''
     if row_counter == 0:
         generate_forecasts = True
     elif (row_counter != 0) and (target_zone == tuple_list[row_counter-1][0]):    
         generate_forecasts = False
     elif (row_counter != 0) and (target_zone != tuple_list[row_counter-1][0]):
         generate_forecasts = True
-            
+    '''        
     np.random.seed(row_counter)
     
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
@@ -726,31 +726,39 @@ for tup in tuple_list[row_counter:]:
 
     #% Generate predictions for training/test set for forecast combination
     # find local weights for meta-training set/ map weights to support locations
-    print('Generating prob. forecasts for train/test set...')
-    
-    train_w_list = []
-    train_p_list = []
-    for i, zone in enumerate(expert_zones[:N_experts]):
-        train_w_list.append(prob_models[zone].find_weights(comb_trainX_allzones[zone][pred_col].values, 
-                                                           trainX_allzones[zone][pred_col].values))
-        train_p_list.append(wemp_to_support(train_w_list[i], trainY[zone].values, y_supp))
+    if generate_forecasts == True:
+        print('Generating prob. forecasts for train/test set...')
+        train_w_dict = {}
+        test_w_list = {}
         
-    test_w_list = []
+        for i, zone in enumerate(all_zones):
+            train_w_dict[zone] = prob_models[zone].find_weights(comb_trainX_allzones[zone][pred_col].values, 
+                                                               trainX_allzones[zone][pred_col].values) 
+            test_w_list[zone] = prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
+                                                              trainX_allzones[zone][pred_col].values)
+
+        generate_forecasts = False
+        #pickle.dump(train_w_dict, open(f'{cd}\\results\\train_w_dict.sav', 'wb'))
+        #pickle.dump(test_w_list, open(f'{cd}\\results\\test_w_dict.sav', 'wb'))
+    
+    # Translate weighted observations to discrete PDFs
+    train_p_list = []
     test_p_list = []
-    for i, zone in enumerate(expert_zones[:N_experts]):
-        test_w_list.append(prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
-                                                          trainX_allzones[zone][pred_col].values))
+    
+    for i, zone in enumerate(all_zones):
+        if zone == target_zone: continue
+    
+        train_p_list.append(wemp_to_support(train_w_list[i], trainY[zone].values, y_supp))
         test_p_list.append(wemp_to_support(test_w_list[i], trainY[zone].values, y_supp))
         
     #% Visualize some prob. forecasts
     #%
     # step 1: find inverted CDFs
-    F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[j][i]) for i in range(500)]) for j,zone in enumerate(expert_zones)]
+    F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[zone].values, train_w_list[zone][i]) for i in range(500)]) for j,zone in enumerate(expert_zones)]
     
     plt.plot(comb_trainY[target_zone][200:300])
     for i in [0,2]:
         #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
-        
         plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3)
     plt.show()
     

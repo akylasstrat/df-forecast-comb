@@ -375,7 +375,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 
                 # Total regret (scale CRPS for better trade-off control)
                 loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
-                    + self.gamma*crps_i/len(self.support)
+                #    + self.gamma*crps_i/len(self.support)
 
                 total_loss += loss.item()
                 
@@ -583,7 +583,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
                 # Total regret (scale CRPS for better trade-off control)
                 loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
-                    + self.gamma*crps_i/len(self.support)
+                    #+ self.gamma*crps_i/len(self.support)
 
                 total_loss += loss.item()
                 
