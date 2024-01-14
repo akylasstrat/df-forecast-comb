@@ -583,11 +583,7 @@ def params():
     params['split_date'] = '2013-01-01' # Defines train/test split
     params['end_date'] = '2013-12-30'
     
-<<<<<<< HEAD
     params['save'] = True # If True, then saves models and results
-=======
-    params['save'] = False # If True, then saves models and results
->>>>>>> d41bd43 (updating results)
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad}
@@ -743,51 +739,28 @@ for tup in tuple_list[row_counter:]:
     #%%
     #% Generate predictions for training/test set for forecast combination
     # find local weights for meta-training set/ map weights to support locations
-<<<<<<< HEAD
     if ('train_w_dict' not in locals()) or ('test_w_dict' not in locals()):
         print('Generating prob. forecasts for train/test set...')
         train_w_dict = {}
         test_w_dict = {}
-=======
-    if generate_forecasts == True:
-        print('Generating prob. forecasts for train/test set...')
-        train_w_dict = {}
-        test_w_list = {}
->>>>>>> d41bd43 (updating results)
         
         for i, zone in enumerate(all_zones):
             train_w_dict[zone] = prob_models[zone].find_weights(comb_trainX_allzones[zone][pred_col].values, 
                                                                trainX_allzones[zone][pred_col].values) 
-<<<<<<< HEAD
             test_w_dict[zone] = prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
                                                               trainX_allzones[zone][pred_col].values)
 
         #pickle.dump(train_w_dict, open(f'{cd}\\results\\train_w_dict.sav', 'wb'))
         #pickle.dump(test_w_list, open(f'{cd}\\results\\test_w_dict.sav', 'wb'))
     #%%
-=======
-            test_w_list[zone] = prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
-                                                              trainX_allzones[zone][pred_col].values)
-
-        generate_forecasts = False
-        #pickle.dump(train_w_dict, open(f'{cd}\\results\\train_w_dict.sav', 'wb'))
-        #pickle.dump(test_w_list, open(f'{cd}\\results\\test_w_dict.sav', 'wb'))
-    
->>>>>>> d41bd43 (updating results)
     # Translate weighted observations to discrete PDFs
     train_p_list = []
     test_p_list = []
     
     for i, zone in enumerate(all_zones):
         if zone == target_zone: continue
-<<<<<<< HEAD
         train_p_list.append(wemp_to_support(train_w_dict[zone], trainY[zone].values, y_supp))
         test_p_list.append(wemp_to_support(test_w_dict[zone], trainY[zone].values, y_supp))
-=======
-    
-        train_p_list.append(wemp_to_support(train_w_list[i], trainY[zone].values, y_supp))
-        test_p_list.append(wemp_to_support(test_w_list[i], trainY[zone].values, y_supp))
->>>>>>> d41bd43 (updating results)
 
 
     #% Visualize some prob. forecasts
@@ -1056,14 +1029,9 @@ for tup in tuple_list[row_counter:]:
             QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
         
         if config['save']:
-<<<<<<< HEAD
             Decision_cost.to_csv(f'{cd}\\results\\{target_problem}_total_linearpool_Decision_cost.csv')
             QS_df.to_csv(f'{cd}\\results\\{target_problem}_total_linear_pool_QS.csv')
             Prescriptions.to_csv(f'{cd}\\results\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
-=======
-            Decision_cost.to_csv(f'{cd}\\results\\{target_problem}_adaptive_linearpool_Decision_cost.csv')
-            QS_df.to_csv(f'{cd}\\results\\{target_problem}_adaptive_linear_pool_QS.csv')
->>>>>>> d41bd43 (updating results)
         
         row_counter += 1
         
