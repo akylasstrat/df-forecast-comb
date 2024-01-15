@@ -567,10 +567,10 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
-    nn_params['patience'] = 10
-    nn_params['batch_size'] = 1024
+    nn_params['patience'] = 15
+    nn_params['batch_size'] = 512
     nn_params['num_epochs'] = 1000
-    nn_params['learning_rate'] = 5e-3
+    nn_params['learning_rate'] = 1e-2
     nn_params['apply_softmax'] = True
     return nn_params
 
@@ -954,7 +954,7 @@ for tup in tuple_list[row_counter:]:
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), 
                                                                      gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 5e-3)
+            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 1e-3)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
                                                   optimizer, epochs = 1000, patience = patience, projection = False)
 
