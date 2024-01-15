@@ -672,14 +672,7 @@ for tup in tuple_list[row_counter:]:
     target_zone = tup[0]    
     critical_fractile = tup[1]
     risk_aversion = tup[2]
-    
-    if row_counter == 0:
-        generate_forecasts = True
-    elif (row_counter != 0) and (target_zone == tuple_list[row_counter-1][0]):    
-        generate_forecasts = False
-    elif (row_counter != 0) and (target_zone != tuple_list[row_counter-1][0]):
-        generate_forecasts = True
-            
+                
     np.random.seed(row_counter)
     
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
@@ -750,9 +743,6 @@ for tup in tuple_list[row_counter:]:
             test_w_dict[zone] = prob_models[zone].find_weights(testX_allzones[zone][pred_col].values, 
                                                               trainX_allzones[zone][pred_col].values)
 
-        #pickle.dump(train_w_dict, open(f'{cd}\\results\\train_w_dict.sav', 'wb'))
-        #pickle.dump(test_w_list, open(f'{cd}\\results\\test_w_dict.sav', 'wb'))
-    #%%
     # Translate weighted observations to discrete PDFs
     train_p_list = []
     test_p_list = []

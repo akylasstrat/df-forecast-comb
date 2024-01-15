@@ -452,7 +452,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
         cvxpy_output = self.newsvendor_layer(combined_pdf)
         return combined_pdf, cvxpy_output
     
-    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True):
+    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False):
         # define projection problem for backward pass
 
         if (projection)and(self.apply_softmax != True):     
@@ -527,36 +527,40 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
             average_train_loss = running_loss / len(train_loader)
             
-            #print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
-
-            #if average_train_loss < best_train_loss:
-            #    best_train_loss = average_train_loss
-            #    best_weights = copy.deepcopy(self.state_dict())
-            #    early_stopping_counter = 0
+            if validation == True:
+                # evaluate performance on stand-out validation set
+                val_loss = self.evaluate(val_loader)
                 
-            #else:
-            #    early_stopping_counter += 1
-            #    if early_stopping_counter >= patience:
-            #        print("Early stopping triggered.")
-                    # recover best weights
-            #        self.load_state_dict(best_weights)
-            #        return
-                       
-            val_loss = self.evaluate(val_loader)
-            
-            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
-
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_weights = copy.deepcopy(self.state_dict())
-                early_stopping_counter = 0
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+    
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        return
             else:
-                early_stopping_counter += 1
-                if early_stopping_counter >= patience:
-                    print("Early stopping triggered.")
-                    # recover best weights
-                    self.load_state_dict(best_weights)
-                    return
+                # only evaluate on training data set
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+    
+                if average_train_loss < best_train_loss:
+                    best_train_loss = average_train_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                    
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        return
+                
 
     def evaluate(self, data_loader):
         # evaluate loss criterion/ used for estimating validation loss
