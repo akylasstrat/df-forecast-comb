@@ -567,7 +567,7 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
-    nn_params['patience'] = 15
+    nn_params['patience'] = 10
     nn_params['batch_size'] = 512
     nn_params['num_epochs'] = 1000
     nn_params['learning_rate'] = 1e-2
@@ -622,8 +622,8 @@ train_forecast_model = False
 generate_forecasts = True
 
 try:
-    Decision_cost = pd.read_csv(f'{cd}\\results\\{target_problem}_total_linearpool_Decision_cost.csv', index_col = 0)
-    QS_df = pd.read_csv(f'{cd}\\results\\{target_problem}_total_linear_pool_QS.csv', index_col = 0)
+    Decision_cost = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_total_linearpool_Decision_cost.csv', index_col = 0)
+    QS_df = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_total_linear_pool_QS.csv', index_col = 0)
     row_counter = len(Decision_cost)
 except: 
     row_counter = 0
@@ -805,7 +805,7 @@ for tup in tuple_list[row_counter:]:
             temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, 
                                         crit_quant = critical_fractile)
             trainZopt[:,j] = temp_z_opt
-#%%
+
         ###########% Static forecast combinations
         lambda_static_dict = {}
         
@@ -857,7 +857,7 @@ for tup in tuple_list[row_counter:]:
             optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
             
             lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
-                                              patience = patience, projection = False)
+                                              patience = patience, projection = False, validation = True)
             if apply_softmax:
                 lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
             else:
@@ -1019,9 +1019,9 @@ for tup in tuple_list[row_counter:]:
             QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
         
         if config['save']:
-            Decision_cost.to_csv(f'{cd}\\results\\{target_problem}_total_linearpool_Decision_cost.csv')
-            QS_df.to_csv(f'{cd}\\results\\{target_problem}_total_linear_pool_QS.csv')
-            Prescriptions.to_csv(f'{cd}\\results\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+            Decision_cost.to_csv(f'{cd}\\results\\fix_{target_problem}_total_linearpool_Decision_cost.csv')
+            QS_df.to_csv(f'{cd}\\results\\fix_{target_problem}_total_linear_pool_QS.csv')
+            Prescriptions.to_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
         
         row_counter += 1
         

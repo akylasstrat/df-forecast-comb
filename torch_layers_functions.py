@@ -126,7 +126,7 @@ class AdaptiveLinearPoolDecisions(nn.Module):
                 error_hat = (y_batch.reshape(-1,1) - z_comb_hat)
 
                 pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                l2_loss = error_hat.norm(p=2)
+                l2_loss = torch.square(error_hat).sum()
                 loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss
                 
                 # backward pass
@@ -231,7 +231,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         
         # define aux variable
         w_error = cp.multiply(prob_weights, error)
-        l2_regularization = self.risk_aversion*cp.norm(w_error)
+        l2_regularization = self.risk_aversion*(w_error@w_error)
 
         objective_funct = cp.Minimize( newsv_cost + l2_regularization ) 
         
@@ -308,10 +308,10 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                l2_loss = error_hat.norm(p=2)
+                sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
+                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
                 
                 # backward pass
@@ -371,10 +371,10 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                l2_loss = error_hat.norm(p=2)
+                sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
+                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
 
                 total_loss += loss.item()
@@ -418,7 +418,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
         
         # define aux variable
         w_error = cp.multiply(prob_weights, error)
-        l2_regularization = self.risk_aversion*cp.norm(w_error)
+        l2_regularization = self.risk_aversion*(w_error@w_error)
 
         objective_funct = cp.Minimize( newsv_cost + l2_regularization ) 
         
@@ -492,10 +492,10 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                l2_loss = error_hat.norm(p=2)
+                sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
+                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
                 
                 # estimate regret
@@ -583,10 +583,10 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                l2_loss = error_hat.norm(p=2)
+                sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*l2_loss \
+                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
 
                 total_loss += loss.item()
