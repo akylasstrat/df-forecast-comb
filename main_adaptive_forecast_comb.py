@@ -541,7 +541,7 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
                                + risk_aversion*(deviation@(deviation*weights[row])), gp.GRB.MINIMIZE)
 
                 m.optimize()
-                Prescriptions[row] = offer.X
+                Prescriptions[row] = offer.X[0]
                 
             return Prescriptions
     
@@ -831,10 +831,10 @@ for tup in tuple_list[row_counter:]:
 
 
         #% PyTorch layers
-        
-        train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-        valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
-                
+        #%%
+        train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512)
+        valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512)
+
         #### CRPS minimization/ with torch layer
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                apply_softmax = True)
@@ -847,6 +847,7 @@ for tup in tuple_list[row_counter:]:
         else:
             lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
         #%%
+        from torch_layers_functions import *
         ##### Decision-focused combination for different values of gamma        
         for gamma in [0, 0.1, 1]:
             
@@ -857,12 +858,12 @@ for tup in tuple_list[row_counter:]:
             optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
             
             lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
-                                              patience = patience, projection = False, validation = True)
+                                              patience = patience, projection = False, validation = True, relative_tolerance = 0.001)
             if apply_softmax:
                 lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
             else:
                 lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
-                
+        #%%
         print(lambda_static_dict)
         
         for m in list(lambda_static_dict.keys())[N_experts:]:
@@ -904,29 +905,31 @@ for tup in tuple_list[row_counter:]:
         adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
         
         
-        
+        #%%
         ### Decision Combination/ LR
         train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
         valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size)
 
 
         lr_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(lr_lpool_decision_model.parameters(), lr = learning_rate)        
+        optimizer = torch.optim.Adam(lr_lpool_decision_model.parameters(), lr = 1e-3)        
         lr_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
                                           patience = patience, projection = False)
 
         adaptive_models_dict['SalvaBench-LR'] = lr_lpool_decision_model
 
-        mlp_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [20,20,20], 
+        mlp_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], 
                                                                output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(mlp_lpool_decision_model.parameters(), lr = learning_rate)        
+        optimizer = torch.optim.Adam(mlp_lpool_decision_model.parameters(), lr = 1e-3)        
         mlp_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
                                           patience = patience, projection = False)
 
         adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
         
-        
-        for gamma in [1]:
+        #%%
+        from torch_layers_functions import *
+
+        for gamma in [0, 0.1, 1]:
                         
             lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
@@ -934,7 +937,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = learning_rate)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False)
+                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0.001)
             
             
             adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
@@ -943,14 +946,14 @@ for tup in tuple_list[row_counter:]:
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), 
                                                                      gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 1e-3)
+            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = learning_rate)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
                                                   optimizer, epochs = 1000, patience = patience, projection = False)
 
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
 
 
-        
+        #%%
         # turn probability vectors to decisions/ closed-form solution for newsvendor problem    
         static_models = list(lambda_static_dict) 
         adaptive_models = list(adaptive_models_dict.keys())
@@ -989,7 +992,6 @@ for tup in tuple_list[row_counter:]:
             # Estimate task-loss for specific model
             temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY[target_zone].values, 
                                               target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
-            print(f'{m}:{temp_Decision_cost[m].values.round(4)}')
             
             # Evaluate QS (approximation of CRPS) for each model
             # find quantile forecasts
@@ -1005,7 +1007,9 @@ for tup in tuple_list[row_counter:]:
         plt.xticks(np.arange(len(target_quant)), target_quant)
         plt.xlabel('Quantile')
         plt.show()
-        
+
+        print('Decision Cost')
+        print(temp_Decision_cost[all_models].mean().round(4))
 
         if row_counter == 0: 
             Decision_cost = temp_Decision_cost.copy()
