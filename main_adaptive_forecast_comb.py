@@ -846,7 +846,7 @@ for tup in tuple_list[row_counter:]:
             lambda_static_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
         else:
             lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
-
+        #%%
         ##### Decision-focused combination for different values of gamma        
         for gamma in [0, 0.1, 1]:
             
@@ -883,7 +883,6 @@ for tup in tuple_list[row_counter:]:
         tensor_validZopt = torch.FloatTensor(trainZopt[-800:])
         tensor_testZopt = torch.FloatTensor(testZopt)
         
-        from torch_layers_functions import *
         adaptive_models_dict = {}
         
         ### CRPS/ Linear Regression

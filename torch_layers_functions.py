@@ -221,17 +221,24 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         z = cp.Variable((1))    
         pinball_loss = cp.Variable(n_locations)
         error = cp.Variable(n_locations)
+        sq_error = cp.Variable(n_locations)
+
         prob_weights = cp.Parameter(n_locations)
             
         newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
                              pinball_loss >= self.crit_fract*(error), 
-                             pinball_loss >= (self.crit_fract - 1)*(error),]
+                             pinball_loss >= (self.crit_fract - 1)*(error),
+                             sq_error >= cp.power(error,2)]
         
         newsv_cost = (1-self.risk_aversion)*prob_weights@pinball_loss
         
         # define aux variable
-        w_error = cp.multiply(prob_weights, error)
-        l2_regularization = self.risk_aversion*(w_error@w_error)
+        #sq_error = cp.power(error, 2)
+        #wsq_error = cp.multiply(prob_weights, sq_error)
+        
+        l2_regularization = self.risk_aversion*(prob_weights@sq_error)
+
+        #l2_regularization = self.risk_aversion*(w_error@w_error)
 
         objective_funct = cp.Minimize( newsv_cost + l2_regularization ) 
         
@@ -408,23 +415,28 @@ class LinearPoolNewsvendorLayer(nn.Module):
         z = cp.Variable((1))    
         pinball_loss = cp.Variable(n_locations)
         error = cp.Variable(n_locations)
+        sq_error = cp.Variable(n_locations)
+        
         prob_weights = cp.Parameter(n_locations)
             
         newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
                              pinball_loss >= self.crit_fract*(error), 
-                             pinball_loss >= (self.crit_fract - 1)*(error),]
+                             pinball_loss >= (self.crit_fract - 1)*(error), 
+                             sq_error >= cp.power(error,2)]
         
         newsv_cost = (1-self.risk_aversion)*prob_weights@pinball_loss
         
         # define aux variable
-        w_error = cp.multiply(prob_weights, error)
-        l2_regularization = self.risk_aversion*(w_error@w_error)
+        #w_error = cp.multiply(prob_weights, error)
+        #sq_error = cp.power(error, 2)
+
+        l2_regularization = (self.risk_aversion)*(prob_weights@sq_error)
 
         objective_funct = cp.Minimize( newsv_cost + l2_regularization ) 
         
         newsv_problem = cp.Problem(objective_funct, newsv_constraints)
         self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights],
-                                           variables = [z, pinball_loss, error] )
+                                           variables = [z, pinball_loss, error, sq_error] )
         
     def forward(self, list_inputs):
         """
