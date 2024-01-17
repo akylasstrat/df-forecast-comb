@@ -593,7 +593,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.2]
+    params['crit_quant'] = [0.8]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -1022,8 +1022,8 @@ for tup in tuple_list[row_counter:]:
             QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
         
         if config['save']:
-            Decision_cost.to_csv(f'{cd}\\results\\fix_{target_problem}_total_linearpool_Decision_cost.csv')
-            QS_df.to_csv(f'{cd}\\results\\fix_{target_problem}_total_linear_pool_QS.csv')
+            Decision_cost.to_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_total_linearpool_Decision_cost.csv')
+            QS_df.to_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_total_linear_pool_QS.csv')
             Prescriptions.to_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
         
         row_counter += 1
