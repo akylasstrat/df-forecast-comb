@@ -102,7 +102,7 @@ for i in range(len(decision_cost)):
 mean_QS_df = decision_cost.copy()
 import re
 
-for m in static_models:
+for m in static_models + adaptive_models_lr + adaptive_models_mlp:
     if m == 'TopExpert': continue
     for i in range(mean_QS_df[m].shape[0]):
         temp = re.findall(r'\d+.\d+', qs_cost[m].iloc[i])
