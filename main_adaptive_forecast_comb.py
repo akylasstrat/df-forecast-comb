@@ -622,17 +622,17 @@ train_forecast_model = False
 generate_forecasts = True
 
 try:
-    Decision_cost = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_total_linearpool_Decision_cost.csv', index_col = 0)
-    QS_df = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_total_linear_pool_QS.csv', index_col = 0)
+    Decision_cost = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_total_linearpool_Decision_cost.csv', index_col = 0)
+    QS_df = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_total_linear_pool_QS.csv', index_col = 0)
     row_counter = len(Decision_cost)
 except: 
     row_counter = 0
 
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
-    tuple_list = [tup for tup in itertools.product(config['target_zones'], config['crit_quant'])]
+    tuple_list = [tup for tup in itertools.product(config['target_zones'] + ['Z1'], config['crit_quant'])]
 elif target_problem == 'reg_trad':
-    tuple_list = [tup for tup in itertools.product(config['target_zones'], config['crit_quant'], 
+    tuple_list = [tup for tup in itertools.product(config['target_zones'] + ['Z1'], config['crit_quant'], 
                                                    config['risk_aversion'])]
 
 #%%
@@ -832,8 +832,8 @@ for tup in tuple_list[row_counter:]:
 
         #% PyTorch layers
         #%%
-        train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512)
-        valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512)
+        train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+        valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
 
         #### CRPS minimization/ with torch layer
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -858,7 +858,7 @@ for tup in tuple_list[row_counter:]:
             optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
             
             lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
-                                              patience = patience, projection = False, validation = True, relative_tolerance = 0.001)
+                                              patience = patience, projection = False, validation = False, relative_tolerance = 0.001)
             if apply_softmax:
                 lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
             else:
@@ -1043,7 +1043,7 @@ for tup in tuple_list[row_counter:]:
 #%%
 mean_QS_df = Decision_cost.copy()
 
-for m in models:
+for m in all_models:
     for i in range(mean_QS_df[m].shape[0]):
         mean_QS_df[m].iloc[i] = QS_df[m].iloc[i].mean()
 
