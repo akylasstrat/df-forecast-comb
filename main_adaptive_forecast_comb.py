@@ -1043,7 +1043,7 @@ for tup in tuple_list[row_counter:]:
 #%%
 mean_QS_df = Decision_cost.copy()
 
-for m in models:
+for m in all_models:
     for i in range(mean_QS_df[m].shape[0]):
         mean_QS_df[m].iloc[i] = QS_df[m].iloc[i].mean()
 
