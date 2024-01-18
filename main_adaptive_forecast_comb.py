@@ -593,7 +593,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.7]
+    params['crit_quant'] = [0.8]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -630,9 +630,9 @@ except:
 
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
-    tuple_list = [tup for tup in itertools.product(config['target_zones'], config['crit_quant'])]
+    tuple_list = [tup for tup in itertools.product(config['target_zones'] + ['Z1'], config['crit_quant'])]
 elif target_problem == 'reg_trad':
-    tuple_list = [tup for tup in itertools.product(config['target_zones'], config['crit_quant'], 
+    tuple_list = [tup for tup in itertools.product(config['target_zones'] + ['Z1'], config['crit_quant'], 
                                                    config['risk_aversion'])]
 
 #%%
@@ -1043,7 +1043,7 @@ for tup in tuple_list[row_counter:]:
 #%%
 mean_QS_df = Decision_cost.copy()
 
-for m in models:
+for m in all_models:
     for i in range(mean_QS_df[m].shape[0]):
         mean_QS_df[m].iloc[i] = QS_df[m].iloc[i].mean()
 
