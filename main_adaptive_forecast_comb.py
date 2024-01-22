@@ -593,7 +593,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.8]
+    params['crit_quant'] = [0.2]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -620,6 +620,7 @@ target_problem = config['problem']
 
 train_forecast_model = False
 generate_forecasts = True
+critical_fractile = config['crit_quant'][0]
 
 try:
     Decision_cost = pd.read_csv(f'{cd}\\results\\fix_{target_problem}_{critical_fractile}_total_linearpool_Decision_cost.csv', index_col = 0)
@@ -672,7 +673,7 @@ for tup in tuple_list[row_counter:]:
     target_zone = tup[0]    
     critical_fractile = tup[1]
     risk_aversion = tup[2]
-                
+    
     np.random.seed(row_counter)
     
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
