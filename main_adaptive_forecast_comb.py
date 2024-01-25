@@ -24,8 +24,6 @@ from gurobi_ml import add_predictor_constr
 from sklearn.preprocessing import MinMaxScaler
 
 #from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
-
-
 #project_dir=Path(cd).parent.__str__()   #project_directory
 
 from EnsemblePrescriptiveTree import *
@@ -38,6 +36,9 @@ from sklearn.neural_network import MLPRegressor
 from utility_functions import *
 from optimal_transport_functions import *
 from torch_layers_functions import *
+
+from torch.utils.data import Dataset, DataLoader
+import torch
 
 # IEEE plot parameters (not sure about mathfont)
 plt.rcParams['figure.constrained_layout.use'] = True
@@ -351,8 +352,6 @@ def tree_params():
 #    dataset = torch.utils.data.TensorDataset(X,Y)
 #    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
-from torch.utils.data import Dataset, DataLoader
-
 def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
@@ -402,9 +401,6 @@ def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor',
     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
 
     return lambdas_inv, lambdas_softmax
-
-
-        
                 
 def task_loss(pred, actual, problem, **kwargs):
     'Estimates task loss for different problems'
@@ -848,7 +844,6 @@ for tup in tuple_list[row_counter:]:
         else:
             lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
         #%%
-        from torch_layers_functions import *
         ##### Decision-focused combination for different values of gamma        
         for gamma in [0, 0.1, 1]:
             
@@ -928,8 +923,6 @@ for tup in tuple_list[row_counter:]:
         adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
         
         #%%
-        from torch_layers_functions import *
-
         for gamma in [0, 0.1, 1]:
                         
             lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
