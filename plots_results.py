@@ -67,8 +67,8 @@ config['save'] = False
 target_prob = 'reg_trad'
 crit_fract = 0.2
 
-decision_cost = pd.read_csv(f'{cd}\\results\\fix_{target_prob}_total_linearpool_Decision_cost.csv', index_col = 0)
-qs_cost = pd.read_csv(f'{cd}\\results\\fix_{target_prob}_total_linear_pool_QS.csv', index_col = 0)
+decision_cost = pd.read_csv(f'{cd}\\results\\fix_{target_prob}_{crit_fract}_total_linearpool_Decision_cost.csv', index_col = 0)
+qs_cost = pd.read_csv(f'{cd}\\results\\fix_{target_prob}_{crit_fract}_total_linear_pool_QS.csv', index_col = 0)
 
 #%%
 decision_cost = decision_cost.dropna()
