@@ -16,6 +16,11 @@ import pickle
 import gurobipy as gp
 import torch
 
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+
+
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 
@@ -519,7 +524,6 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
             # solve for multiple test observations/ declares gurobi model once for speed up
             n_test_obs = len(weights)
             Prescriptions = np.zeros((n_test_obs))
-
             m = gp.Model()            
             m.setParam('OutputFlag', 0)
 
@@ -527,18 +531,22 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
             offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
             deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
             loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
+            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
             
             # constraints
-            m.addConstr(deviation == (target_scen - offer) )            
+            m.addConstr(deviation == (target_scen - offer) )
             m.addConstr(loss >= crit_quant*deviation )
             m.addConstr(loss >= (crit_quant-1)*deviation )
+            m.setObjective( t, gp.GRB.MINIMIZE)
             
             for row in range(len(weights)):
-                
-                m.setObjective( (1-risk_aversion)*(weights[row]@loss) 
-                               + risk_aversion*(deviation@(deviation*weights[row])), gp.GRB.MINIMIZE)
+                c1 = m.addConstr(t >= (1-risk_aversion)*(weights[row]@loss) 
+                               + risk_aversion*(deviation@(deviation*weights[row])))
 
                 m.optimize()
+                
+                m.remove(c1)
+                
                 Prescriptions[row] = offer.X[0]
                 
             return Prescriptions
@@ -565,7 +573,7 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
-    nn_params['patience'] = 10
+    nn_params['patience'] = 15
     nn_params['batch_size'] = 512
     nn_params['num_epochs'] = 1000
     nn_params['learning_rate'] = 1e-2
@@ -592,7 +600,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.2]
+    params['crit_quant'] = [0.8]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -710,8 +718,6 @@ for tup in tuple_list[row_counter:]:
     #### Train different probabilistic forecasting models
     
     ## kNN
-    from sklearn.neighbors import KNeighborsRegressor
-    from sklearn.model_selection import GridSearchCV
     parameters = {'n_neighbors':[5, 10, 50, 100]}
     
     # cross-validation for hyperparamter tuning and model training
@@ -722,22 +728,35 @@ for tup in tuple_list[row_counter:]:
         
     train_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(comb_trainX_allzones[target_zone][pred_col]).toarray()*(1/best_n_neighbors)
     test_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(testX_allzones[target_zone][pred_col]).toarray()*(1/best_n_neighbors)
-    #%%
-    ## Random Forest    
-    rf_model = EnsemblePrescriptiveTree(n_estimators = 100, max_features = len(pred_col), type_split = 'quant' )
-    rf_model.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values, quant = np.arange(.01, 1, .01), problem = 'mse') 
-    
-    train_w_dict['rf'] = rf_model.find_weights(comb_trainX_allzones[target_zone][pred_col].values, 
-                                                       trainX_allzones[target_zone][pred_col].values) 
-    test_w_dict['rf'] = rf_model.find_weights(testX_allzones[target_zone][pred_col].values, 
-                                                      trainX_allzones[target_zone][pred_col].values)
+        
+    # cross-validation for hyperparamter tuning and model training
+    knn_model_cv = GridSearchCV(KNeighborsRegressor(), parameters)
+    knn_model_cv.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)    
+    best_n_neighbors = knn_model_cv.best_estimator_.get_params()['n_neighbors']
 
+    
+    rf_parameters = {'min_samples_leaf':[1, 2, 5, 10],'n_estimators':[100], 
+                  'max_features':[1, 2, len(pred_col)]}
+
+    rf_model_cv = GridSearchCV(ExtraTreesRegressor(), rf_parameters)
+    rf_model_cv.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)    
+        
+    rf_model = rf_model_cv.best_estimator_
+    
+    knn_point_pred = knn_model_cv.best_estimator_.predict(testX_allzones[target_zone][pred_col].values)
+    rf_point_pred = rf_model.predict(testX_allzones[target_zone][pred_col].values)
+
+    print(f'knn: {eval_point_pred(knn_point_pred, testY[target_zone].values)}')
+    print(f'rf: {eval_point_pred(rf_point_pred, testY[target_zone].values)}')
+
+    train_w_dict['rf'] = forest_find_weights(trainX_allzones[target_zone][pred_col], comb_trainX_allzones[target_zone][pred_col], rf_model)
+    test_w_dict['rf'] = forest_find_weights(trainX_allzones[target_zone][pred_col], testX_allzones[target_zone][pred_col], rf_model)
+        
     #%%
     ## Climatology forecast
     train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
     test_w_dict['clim'] = np.ones((testY.shape[0], trainY.shape[0]))*(1/len(trainY))
-    #%%
-
+    
     # Translate weighted observations to discrete PDFs
     train_p_list = []
     test_p_list = []
@@ -755,6 +774,16 @@ for tup in tuple_list[row_counter:]:
         else:            
             train_p_list.append(wemp_to_support(train_w_dict[learner], trainY[target_zone].values, y_supp))
             test_p_list.append(wemp_to_support(test_w_dict[learner], trainY[target_zone].values, y_supp))
+
+    #%% estimate CRPS
+    print('CRPS')
+    for j, m in enumerate(all_learners): 
+        temp_CDF = test_p_list[j].cumsum(1)
+        H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY[target_zone].values.reshape(-1,1)
+        
+        CRPS = np.square(temp_CDF - H_i).mean()
+
+        print(f'{m}:{CRPS}')
 
     #%%
     #% Visualize some prob. forecasts
@@ -816,10 +845,10 @@ for tup in tuple_list[row_counter:]:
         ###########% Static forecast combinations
         lambda_static_dict = {}
         
-        for i in range(N_experts):
+        for i,learner in enumerate(all_learners):
             temp_ind = np.zeros(N_experts)
             temp_ind[i] = 1
-            lambda_static_dict[f'Model-{i}'] = temp_ind
+            lambda_static_dict[f'{learner}'] = temp_ind
             
         lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
@@ -975,10 +1004,12 @@ for tup in tuple_list[row_counter:]:
         temp_Decision_cost['Quantile'] = [critical_fractile]
         temp_Decision_cost['risk_aversion'] = risk_aversion
         temp_Decision_cost['Target'] = target_zone
+        temp_mean_QS = temp_Decision_cost.copy()
 
         target_quant = np.arange(0.1, 1, 0.1).round(2)
-
+        print('Estimating out-of-sample performance...')
         for j, m in enumerate(all_models):
+            print(m)
             if m in static_models:                
                 # Combine PDFs for each observation
                 temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
@@ -992,43 +1023,57 @@ for tup in tuple_list[row_counter:]:
                                                 crit_quant = critical_fractile)
                
             Prescriptions[m] = temp_prescriptions
+            print(m)
                 
             # Estimate task-loss for specific model
             temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY[target_zone].values, 
                                               target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+            print(m)
             
             # Evaluate QS (approximation of CRPS) for each model
             # find quantile forecasts
             temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
             temp_qs = 100*pinball(temp_q_forecast, testY[target_zone].values, target_quant).round(4)
-            
+            print(m)
+
             temp_QS[m] = [temp_qs]
             
-            if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
-                plt.plot(temp_qs, label = m)
-        plt.legend()
-        plt.ylabel('Pinball loss')
-        plt.xticks(np.arange(len(target_quant)), target_quant)
-        plt.xlabel('Quantile')
-        plt.show()
+            temp_CDF = temp_pdf.cumsum(1)
+            H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY[target_zone].values.reshape(-1,1)
+            
+            CRPS = 100*np.square(temp_CDF - H_i).mean()            
+            temp_mean_QS[m] = CRPS
 
+        #    if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
+        #        plt.plot(temp_qs, label = m)
+        #plt.legend()
+        #plt.ylabel('Pinball loss')
+        #plt.xticks(np.arange(len(target_quant)), target_quant)
+        #plt.xlabel('Quantile')
+        #plt.show()
+        
         print('Decision Cost')
         print(temp_Decision_cost[all_models].mean().round(4))
 
+        print('CRPS')
+        print(temp_mean_QS[all_models].mean().round(4))
+        
         if row_counter == 0: 
             Decision_cost = temp_Decision_cost.copy()
-        else:
-            Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)
+            QS_df = temp_QS.copy()            
+            mean_QS = temp_mean_QS.copy()
             
-        if row_counter == 0: 
-            QS_df = temp_QS.copy()
         else:
+            Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)            
             QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
+            mean_QS = pd.concat([mean_QS, temp_mean_QS], ignore_index = True)        
         
         if config['save']:
             Decision_cost.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_Decision_cost.csv')
             QS_df.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_QS.csv')
-            Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+            mean_QS.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_mean_QS.csv')
+
+            #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
         
         row_counter += 1
         
