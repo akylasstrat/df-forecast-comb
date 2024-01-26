@@ -17,6 +17,27 @@ plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
+def cart_find_weights(trainX, testX, cart_model):
+    ''' Find weights for a sklearn forest model '''    
+    Leaf_nodes = cart_model.apply(trainX).reshape(-1,1) # nObs*nTrees: a_ij shows the leaf node for observation i in tree j
+    Index = cart_model.apply(testX).reshape(-1,1) # Leaf node for test set
+    nTrees = 1
+    Weights = np.zeros(( len(testX), len(trainX) ))
+    #print(Weights.shape)
+    #Estimate sample weights
+    print('Retrieving weights...')
+    for i in range(len(testX)):
+        #New query point
+        x0 = Index[i:i+1,:]
+        #Find observations in terminal nodes/leaves (all trees)
+        obs = 1*(x0.repeat(len(trainX), axis = 0) == Leaf_nodes)
+        #Cardinality of leaves
+        cardinality = np.sum(obs, axis = 0).reshape(-1,1).T.repeat(len(trainX), axis = 0)
+        #Update weights
+        Weights[i,:] = (obs/cardinality).sum(axis = 1)/nTrees
+
+    return Weights
+
 def forest_find_weights(trainX, testX, forest_model):
     ''' Find weights for a sklearn forest model '''    
     Leaf_nodes = forest_model.apply(trainX) # nObs*nTrees: a_ij shows the leaf node for observation i in tree j

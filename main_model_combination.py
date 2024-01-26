@@ -113,6 +113,101 @@ def averaging_decisions(target_y, train_z_opt, problem,
     
     return lambdas.X
 
+def averaging_decisions(target_y, train_z_opt, problem, 
+                        crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0, 
+                        **kwargs):            
+    ''' (Salva's benchmark) Solve the stochastic problem in-sample for each observations and each expert, combine the decisions'''
+
+    n_obs = train_z_opt.shape[0]
+    n_models = train_z_opt.shape[1]
+    risk_aversion = kwargs['risk_aversion']
+
+    ### Find optimal decisions under perfect foresight information
+    
+    print('Solve in-sample stchastic problems...')
+    
+    #z_opt = np.zeros((n_obs, n_models))
+    insample_cost = np.zeros(n_models)
+    insample_inverse_cost = np.zeros(n_models)
+    
+    for j in range(n_models):
+        '''
+        if problem == 'newsvendor':
+            for i in range(n_obs):
+                # Solve stochastic problem, find decision
+                z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
+            # Estimate decision cost (regret)
+        elif problem == 'reg_trad':
+            temp_z_opt = solve_opt_prob(support, prob_vectors[j], problem, risk_aversion = risk_aversion, 
+                                        crit_quant = crit_fract)
+            z_opt[:,j] = temp_z_opt
+        '''
+        
+    #### set optimization problem    
+    m = gp.Model()
+    if verbose == 0: 
+        m.setParam('OutputFlag', 0)
+    # Decision variables
+    lambdas = m.addMVar(n_models, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
+    z_comb = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
+    
+    lambdas.Start = (1/n_models)*np.ones(n_models)
+    
+    error = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    pinball_loss_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
+
+    m.addConstr( lambdas.sum() == 1)
+    
+    m.addConstr( z_comb == sum([train_z_opt[:,j]*lambdas[j] for j in range(n_models)]) )
+    
+    # Task-loss function
+    m.addConstr( error == target_y - z_comb)
+    m.addConstr( pinball_loss_i >= crit_fract*error)
+    m.addConstr( pinball_loss_i >= (crit_fract-1)*error)
+
+    m.setObjective( (1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error) , gp.GRB.MINIMIZE)
+    m.optimize()
+    
+    return lambdas.X
+
+def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.01, .01).round(2), verbose = 0):
+
+    'Linear pool minimizing the CRPS, returns the combination weights'
+    
+    #### set optimization problem
+    n_obs = prob_vectors[0].shape[0]
+    n_locs = len(support)
+    n_experts = len(prob_vectors)
+    
+    m = gp.Model()
+    if verbose == 0: 
+        m.setParam('OutputFlag', 0)
+        
+    # Decision variables
+    lambdas = m.addMVar(n_experts, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
+    p_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
+    CDF_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
+    
+    lambdas.Start = (1/n_experts)*np.ones(n_experts)
+    
+    crps_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
+    # Heavyside function for each observation
+    H_i = 1*np.repeat(support.reshape(1,-1), n_obs, axis = 0) >= target_y.reshape(-1,1)
+
+    # Linear pool
+    m.addConstr( p_comb == sum([prob_vectors[i]*lambdas[i] for i in range(n_experts)]) )
+    # PDF to CDF
+    m.addConstrs( CDF_comb[:,j] == p_comb[:,:j+1].sum(1) for j in range(n_locs))
+    print('check1')
+    # CRPS for each observation i
+    m.addConstrs( crps_i[i] >= (CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i]) for i in range(n_obs))
+    print('check2')
+
+    m.setObjective( crps_i.sum()/n_obs, gp.GRB.MINIMIZE)
+    m.optimize()
+    
+    return lambdas.X
+
 def wsum_tune_combination_newsvendor(target_y, prob_vectors, brc_predictor = [], type_ = 'convex_comb', 
                                 crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
 
@@ -600,7 +695,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.8]
+    params['crit_quant'] = [0.9]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -716,7 +811,7 @@ for tup in tuple_list[row_counter:]:
     test_w_dict = {}
 
     #### Train different probabilistic forecasting models
-    
+    probabilistic_models = {}
     ## kNN
     parameters = {'n_neighbors':[5, 10, 50, 100]}
     
@@ -734,28 +829,47 @@ for tup in tuple_list[row_counter:]:
     knn_model_cv.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)    
     best_n_neighbors = knn_model_cv.best_estimator_.get_params()['n_neighbors']
 
+    probabilistic_models['knn'] = knn_model_cv.best_estimator_
+
+    #%% CART
+    from sklearn.tree import DecisionTreeRegressor
     
-    rf_parameters = {'min_samples_leaf':[1, 2, 5, 10],'n_estimators':[100], 
+    cart_parameters = {'max_depth':[5, 10, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
+    cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
+    cart_model_cv.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)    
+        
+    cart_model = cart_model_cv.best_estimator_
+    probabilistic_models['cart'] = cart_model_cv.best_estimator_
+    
+    train_w_dict['cart'] = cart_find_weights(trainX_allzones[target_zone][pred_col], comb_trainX_allzones[target_zone][pred_col], cart_model)
+    test_w_dict['cart'] = cart_find_weights(trainX_allzones[target_zone][pred_col], testX_allzones[target_zone][pred_col], cart_model)
+    
+    #%% Random Forest
+    rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 
                   'max_features':[1, 2, len(pred_col)]}
 
     rf_model_cv = GridSearchCV(ExtraTreesRegressor(), rf_parameters)
     rf_model_cv.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)    
         
     rf_model = rf_model_cv.best_estimator_
-    
+    probabilistic_models['rf'] = rf_model_cv.best_estimator_
+
     knn_point_pred = knn_model_cv.best_estimator_.predict(testX_allzones[target_zone][pred_col].values)
     rf_point_pred = rf_model.predict(testX_allzones[target_zone][pred_col].values)
-
-    print(f'knn: {eval_point_pred(knn_point_pred, testY[target_zone].values)}')
-    print(f'rf: {eval_point_pred(rf_point_pred, testY[target_zone].values)}')
-
+    
     train_w_dict['rf'] = forest_find_weights(trainX_allzones[target_zone][pred_col], comb_trainX_allzones[target_zone][pred_col], rf_model)
     test_w_dict['rf'] = forest_find_weights(trainX_allzones[target_zone][pred_col], testX_allzones[target_zone][pred_col], rf_model)
+    
+    #%% Check forecast accuracy    
+    for model in probabilistic_models.keys():
+        temp_pred = probabilistic_models[model].predict(testX_allzones[target_zone][pred_col].values)
+        print(f'{model}: {eval_point_pred(temp_pred, testY[target_zone].values)}')
+    
         
     #%%
     ## Climatology forecast
-    train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
-    test_w_dict['clim'] = np.ones((testY.shape[0], trainY.shape[0]))*(1/len(trainY))
+    #train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
+    #test_w_dict['clim'] = np.ones((testY.shape[0], trainY.shape[0]))*(1/len(trainY))
     
     # Translate weighted observations to discrete PDFs
     train_p_list = []
@@ -792,10 +906,10 @@ for tup in tuple_list[row_counter:]:
     F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY[target_zone].values, train_w_dict[learner][i]) for i in range(500)]) 
              for j,learner in enumerate(all_learners)]
     
-    plt.plot(comb_trainY[target_zone][200:300])
+    plt.plot(comb_trainY[target_zone][200:250])
     for i, learner in enumerate(all_learners):
         #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
-        plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, label = learner)
+        plt.fill_between(np.arange(50), F_inv[i][200:250,0], F_inv[i][200:250,-1], alpha = .3, label = learner)
     plt.legend()
     plt.show()
     
@@ -882,6 +996,11 @@ for tup in tuple_list[row_counter:]:
             lambda_static_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
         else:
             lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
+        
+        
+        #%%
+        lambda_crps = crps_learning_combination(comb_trainY[target_zone].values, train_p_list, support = y_supp, verbose = 1)
+        lambda_static_dict['CRPS'] = lambda_crps
         #%%
         ##### Decision-focused combination for different values of gamma        
         for gamma in config['gamma_list']:
@@ -1095,5 +1214,3 @@ mean_QS_df = Decision_cost.copy()
 for m in all_models:
     for i in range(mean_QS_df[m].shape[0]):
         mean_QS_df[m].iloc[i] = QS_df[m].iloc[i].mean()
-
-
