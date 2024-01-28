@@ -688,14 +688,14 @@ def params():
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad}
-    params['gamma_list'] = []
+    params['gamma_list'] = [0, 0.1, 1]
     params['N_experts'] = 9
     params['iterations'] = 5
     params['target_zones'] = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5',
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.9]
+    params['crit_quant'] = [0.8]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
