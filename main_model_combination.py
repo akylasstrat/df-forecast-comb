@@ -668,8 +668,8 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
-    nn_params['patience'] = 15
-    nn_params['batch_size'] = 512
+    nn_params['patience'] = 10
+    nn_params['batch_size'] = 1024  
     nn_params['num_epochs'] = 1000
     nn_params['learning_rate'] = 1e-2
     nn_params['apply_softmax'] = True
@@ -695,7 +695,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.8]
+    params['crit_quant'] = [0.9]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -1012,7 +1012,7 @@ for tup in tuple_list[row_counter:]:
             optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
             
             lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
-                                              patience = patience, projection = False, validation = False, relative_tolerance = 0.001)
+                                              patience = patience, projection = False, validation = False, relative_tolerance = 0)
             if apply_softmax:
                 lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
             else:
@@ -1089,7 +1089,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = learning_rate)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0.001)
+                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
             
             
             adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
@@ -1100,7 +1100,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = learning_rate)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False)
+                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
 
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
 
