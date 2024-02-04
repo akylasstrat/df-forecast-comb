@@ -635,8 +635,8 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
             m.setObjective( t, gp.GRB.MINIMIZE)
             
             for row in range(len(weights)):
-                c1 = m.addConstr(t >= (1-risk_aversion)*(weights[row]@loss) 
-                               + risk_aversion*(deviation@(deviation*weights[row])))
+                c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) 
+                               + 2*risk_aversion*(deviation@(deviation*weights[row])))
 
                 m.optimize()
                 
@@ -695,7 +695,7 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.9]
+    params['crit_quant'] = [0.3]
     params['risk_aversion'] = [0.5]
     
     # approaches to map data to decisions
@@ -836,6 +836,8 @@ for tup in tuple_list[row_counter:]:
     
     cart_parameters = {'max_depth':[5, 10, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
     cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
+    cart_predictors = ['wspeed10','wspeed10_sq', 'wspeed10_cb', 'wdir10_rad']
+    
     cart_model_cv.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)    
         
     cart_model = cart_model_cv.best_estimator_
@@ -860,12 +862,52 @@ for tup in tuple_list[row_counter:]:
     train_w_dict['rf'] = forest_find_weights(trainX_allzones[target_zone][pred_col], comb_trainX_allzones[target_zone][pred_col], rf_model)
     test_w_dict['rf'] = forest_find_weights(trainX_allzones[target_zone][pred_col], testX_allzones[target_zone][pred_col], rf_model)
     
-    #%% Check forecast accuracy    
+    #%%
+    '''
+    #% Quantile Regression
+    from sklearn.linear_model import QuantileRegressor
+    qr_predictors = ['wspeed100', 'wspeed100_sq', 'wspeed100_cb', 'wdir100_rad']
+    
+    qr_model = {}
+    for q in np.arange(0.01, 1, 0.01).round(2):
+        qr = QuantileRegressor(quantile=q, solver = 'highs', alpha = 0)
+        qr_model[f'{q}'] = qr.fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)
+    #%
+    train_q_pred = [qr_model[f'{q}'].predict(comb_trainX_allzones[target_zone][pred_col]) for q in np.arange(0.01, 1, 0.01).round(2)]
+    train_q_pred = projection(np.array(train_q_pred).transpose())
+    train_q_pred = np.sort(train_q_pred, axis = 1).round(2)
+
+    test_q_pred = [qr_model[f'{q}'].predict(testX_allzones[target_zone][pred_col]) for q in np.arange(0.01, 1, 0.01).round(2)]
+    test_q_pred = projection(np.array(test_q_pred).transpose())
+    test_q_pred = np.sort(test_q_pred, axis = 1).round(2)
+
+    # sample quantile function
+    u_ind = np.random.choice(np.arange(99), size = (1000), replace = True)
+    #%    
+    # translate quantile function to empirical pdf on the support locations
+    train_p_qrmodel = np.array([wemp_to_support( (1/len(u_ind))*np.ones((1,len(u_ind))), train_q_pred[i][u_ind], y_supp).reshape(-1) for i in range(n_obs)])
+    test_p_qrmodel = np.array([wemp_to_support( (1/len(u_ind))*np.ones((1,len(u_ind))), test_q_pred[i][u_ind], y_supp).reshape(-1) for i in range(n_obs)])
+    '''
+    #%% Check point forecast accuracy    
     for model in probabilistic_models.keys():
         temp_pred = probabilistic_models[model].predict(testX_allzones[target_zone][pred_col].values)
         print(f'{model}: {eval_point_pred(temp_pred, testY[target_zone].values)}')
     
-        
+    #%% Conformal prediction
+    '''
+    knn_error = trainY[target_zone].values - knn_model_cv.best_estimator_.predict(trainX_allzones[target_zone][pred_col].values)
+    from mapie.regression import MapieRegressor
+    
+    
+    mapie_regressor = MapieRegressor(estimator=knn_model_cv.best_estimator_, method='plus', cv=5).fit(trainX_allzones[target_zone][pred_col].values, trainY[target_zone].values)
+    
+    y_pred, y_pis = mapie_regressor.predict(testX_allzones[target_zone][pred_col].values, alpha = np.arange(.1, 1, .1))
+    
+    plt.plot(y_pred[:24])
+    plt.plot(y_pis[:24,0,:], '--')
+    plt.plot(y_pis[:24,1,:], '--')
+    plt.show()
+    '''
     #%%
     ## Climatology forecast
     #train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
@@ -889,7 +931,7 @@ for tup in tuple_list[row_counter:]:
             train_p_list.append(wemp_to_support(train_w_dict[learner], trainY[target_zone].values, y_supp))
             test_p_list.append(wemp_to_support(test_w_dict[learner], trainY[target_zone].values, y_supp))
 
-    #%% estimate CRPS
+    # estimate CRPS
     print('CRPS')
     for j, m in enumerate(all_learners): 
         temp_CDF = test_p_list[j].cumsum(1)
@@ -898,7 +940,21 @@ for tup in tuple_list[row_counter:]:
         CRPS = np.square(temp_CDF - H_i).mean()
 
         print(f'{m}:{CRPS}')
+    
+    # estimate QS
+    print('QS')
+    target_quant = np.arange(.05, 1, .05)
+    for j,m in enumerate(all_learners):
+        temp_pdf = test_p_list[j]
 
+        temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
+        temp_qs = 100*pinball(temp_q_forecast, testY[target_zone].values, target_quant).round(4)
+        print(m)
+        plt.plot(temp_qs, label = m)
+    #plt.plot(100*pinball(test_q_pred, testY[target_zone].values, target_quant).round(4), label = 'QR reg')
+    plt.legend()
+    plt.show()
+    
     #%%
     #% Visualize some prob. forecasts
     #%

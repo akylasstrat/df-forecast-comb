@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 ############### Auxiliary functions 
 
 def discrete_cdf(target_vals, x_observations, w = []):
-    ''' CDF from weighted discrete distribution
+    ''' Estimates the CDF from weighted discrete distribution
         target_vals: array to evaluate, 
         x_observations: discrete observations, 
         w: observation weights, if == [], then set to uniform, 
@@ -39,7 +39,7 @@ def discrete_cdf(target_vals, x_observations, w = []):
 def inverted_cdf(target_probs, x_observations, w = []):
     ''' Inverted CDF from weighted discrete distribution
         target_probs: array with values to evaluate probabilities/quantiles/percentiles, 
-        x_observations: discrete observations, 
+        x_observations: discrete observations/ support of distribution/ locations, 
         w: observation weights, if == [], then set to uniform, 
         
         Returns the probability of x_observations <= target_vals'''

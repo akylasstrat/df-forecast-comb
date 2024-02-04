@@ -239,7 +239,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
 
         #l2_regularization = self.risk_aversion*(w_error@w_error)
 
-        objective_funct = cp.Minimize( (1-self.risk_aversion)*newsv_cost + self.risk_aversion*l2_regularization ) 
+        objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*self.risk_aversion*l2_regularization ) 
         
         newsv_problem = cp.Problem(objective_funct, newsv_constraints)
         self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
@@ -317,7 +317,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
+                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
                 
                 # backward pass
@@ -380,7 +380,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
+                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
 
                 total_loss += loss.item()
@@ -433,7 +433,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
         #l2_regularization = (prob_weights@sq_error)
 
-        objective_funct = cp.Minimize( (1-self.risk_aversion)*newsv_cost + (self.risk_aversion)*l2_regularization ) 
+        objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
         
         newsv_problem = cp.Problem(objective_funct, newsv_constraints)
         self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
@@ -509,7 +509,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
+                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
                 
                 # backward pass
@@ -587,7 +587,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 sql2_loss = torch.square(error_hat).sum()
                 
                 # Total regret (scale CRPS for better trade-off control)
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss \
+                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
                     + self.gamma*crps_i/len(self.support)
                 
 
