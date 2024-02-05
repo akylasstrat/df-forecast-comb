@@ -395,7 +395,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         
 class LinearPoolNewsvendorLayer(nn.Module):        
     def __init__(self, num_inputs, support, 
-                 gamma, apply_softmax = False, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
+                 gamma, problem = 'reg_trad', apply_softmax = False, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
         super(LinearPoolNewsvendorLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -408,37 +408,57 @@ class LinearPoolNewsvendorLayer(nn.Module):
         self.apply_softmax = apply_softmax
         self.regularizer = regularizer
         self.crit_fract = critic_fract
+        self.problem = problem
         
         n_locations = len(self.support)
-        # newsvendor layer (for i-th observation)
-        z = cp.Variable((1))    
-        pinball_loss = cp.Variable(n_locations)
-        error = cp.Variable(n_locations)
         
+        if self.problem == 'reg_trad':
+            # newsvendor layer (for i-th observation)
+            z = cp.Variable((1))    
+            pinball_loss = cp.Variable(n_locations)
+            error = cp.Variable(n_locations)
+            prob_weights = cp.Parameter(n_locations)
+            sqrt_prob_weights = cp.Parameter(n_locations)
 
-        prob_weights = cp.Parameter(n_locations)
-        sqrt_prob_weights = cp.Parameter(n_locations)
+            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
+                                 pinball_loss >= self.crit_fract*(error), 
+                                 pinball_loss >= (self.crit_fract - 1)*(error)]
             
-        newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                             pinball_loss >= self.crit_fract*(error), 
-                             pinball_loss >= (self.crit_fract - 1)*(error)]
-        
-        newsv_cost = prob_weights@pinball_loss
-        
-        # define aux variable
-        #w_error = cp.multiply(prob_weights, error)
-        #sq_error = cp.power(error, 2)
-        w_error = cp.multiply(sqrt_prob_weights, error)
-        l2_regularization = cp.sum_squares(w_error)
+            newsv_cost = prob_weights@pinball_loss
+            
+            # define aux variable
+            #w_error = cp.multiply(prob_weights, error)
+            #sq_error = cp.power(error, 2)
+            w_error = cp.multiply(sqrt_prob_weights, error)
+            l2_regularization = cp.sum_squares(w_error)
+    
+            #l2_regularization = (prob_weights@sq_error)
+    
+            objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
+            
+            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
+            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
+                                               variables = [z, pinball_loss, error] )
+        elif self.problem == 'pwl':
+            # newsvendor layer (for i-th observation)
+            z = cp.Variable((1))    
+            pwl_loss = cp.Variable(n_locations)
+            error = cp.Variable(n_locations)
+            prob_weights = cp.Parameter(n_locations)
+            
+            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
+                                 pwl_loss >= 0.2*(error),
+                                 pwl_loss >= -0.5*(error),
+                                 pwl_loss >= -0.8*(error + 0.3)]
+            
+            newsv_cost = prob_weights@pwl_loss
+    
+            objective_funct = cp.Minimize( newsv_cost )             
+            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
+            
+            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights],
+                                               variables = [z, pwl_loss, error] )
 
-        #l2_regularization = (prob_weights@sq_error)
-
-        objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
-        
-        newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
-                                           variables = [z, pinball_loss, error] )
-        
     def forward(self, list_inputs):
         """
         Forward pass of the newvendor layer.
@@ -462,7 +482,11 @@ class LinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
+        if self.problem == 'reg_trad':
+            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
+        elif self.problem == 'pwl':
+            cvxpy_output = self.newsvendor_layer(combined_pdf)
+            
         return combined_pdf, cvxpy_output
     
     def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
