@@ -134,6 +134,7 @@ def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.0
     m = gp.Model()
     if verbose == 0: 
         m.setParam('OutputFlag', 0)
+    m.setParam('BarHomogeneous', 1)
         
     # Decision variables
     lambdas = m.addMVar(n_experts, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
@@ -148,14 +149,19 @@ def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.0
 
     # Linear pool
     m.addConstr( p_comb == sum([prob_vectors[i]*lambdas[i] for i in range(n_experts)]) )
+    m.addConstr( lambdas.sum() == 1 )
+
     # PDF to CDF
     m.addConstrs( CDF_comb[:,j] == p_comb[:,:j+1].sum(1) for j in range(n_locs))
     print('check1')
     # CRPS for each observation i
-    m.addConstrs( crps_i[i] >= (CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i]) for i in range(n_obs))
+    
+    #m.addConstrs( crps_i[i] >= (CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i]) for i in range(n_obs))
     print('check2')
-
-    m.setObjective( crps_i.sum()/n_obs, gp.GRB.MINIMIZE)
+    
+    #crps_i = (CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i])
+    #print(crps_i)
+    m.setObjective( sum([(CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i]) for i in range(n_obs)])/n_obs, gp.GRB.MINIMIZE)
     m.optimize()
     
     return lambdas.X
@@ -738,7 +744,7 @@ def nn_params():
     'NN hyperparameters'
     nn_params = {}
     nn_params['patience'] = 10
-    nn_params['batch_size'] = 512  
+    nn_params['batch_size'] = 1000  
     nn_params['num_epochs'] = 1500
     nn_params['learning_rate'] = 1e-1
     nn_params['apply_softmax'] = True
@@ -750,8 +756,9 @@ def params():
     params = {}
 
     params['start_date'] = '2012-01-01'
-    params['split_date'] = '2013-01-01' # Defines train/test split
-    params['end_date'] = '2013-12-30'
+    params['split_date_prob'] = '2013-01-01' # Defines train/test split
+    params['split_date_comb'] = '2014-01-01' # Defines train/test split
+    params['end_date'] = '2014-07-01'
     
     params['save'] = True # If True, then saves models and results
     
@@ -786,6 +793,7 @@ aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse
 #%% Data pre-processing
 zone_target = config['target_zone']
 aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
+problem = config['problem']
 
 del aggr_df['ZONEID']
 
@@ -852,7 +860,7 @@ elif target_problem == 'reg_trad':
 #N_experts = config['N_experts']
 
 # number of observations to train prob. forecasting model
-N_sample = len(aggr_df)//4
+#N_sample = len(aggr_df)//4
 
 step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
@@ -867,17 +875,21 @@ all_variables = weather_variables + calendar_variables
 #%%
 
 feat_scaler = MinMaxScaler()
-feat_scaler.fit(aggr_df[all_variables][config['start_date']:config['split_date']])
+feat_scaler.fit(aggr_df[all_variables][config['start_date']:config['split_date_comb']])
 aggr_df[all_variables] = feat_scaler.transform(aggr_df[all_variables])
 
 ### Create train/test sets for all series
-trainY = aggr_df['POWER'][config['start_date']:config['split_date']][:N_sample].round(2)
-comb_trainY = aggr_df['POWER'][config['start_date']:config['split_date']][N_sample:].round(2)
-testY = aggr_df['POWER'][config['split_date']:].round(2)
+trainY = aggr_df['POWER'][config['start_date']:config['split_date_prob']].round(2)
+comb_trainY = aggr_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
+testY = aggr_df['POWER'][config['split_date_comb']:].round(2)
 
-trainX_weather = aggr_df[weather_variables][config['start_date']:config['split_date']][:N_sample]
-comb_trainX_weather = aggr_df[weather_variables][config['start_date']:config['split_date']][N_sample:]
-testX_weather = aggr_df[weather_variables][config['split_date']:]
+trainX_weather = aggr_df[weather_variables][config['start_date']:config['split_date_prob']]
+comb_trainX_weather = aggr_df[weather_variables][config['split_date_prob']:config['split_date_comb']]
+testX_weather = aggr_df[weather_variables][config['split_date_comb']:]
+
+trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date_prob']]
+comb_trainX_date = aggr_df[calendar_variables][config['split_date_prob']:config['split_date_comb']]
+testX_date = aggr_df[calendar_variables][config['split_date_comb']:]
 
 #%%
 ### NN hyperparameters
@@ -897,18 +909,9 @@ for tup in tuple_list[row_counter:]:
     risk_aversion = tup[2]
         
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
-    #target_zone = config['target_zone']
-    #expert_zones = ['Z2', 'Z4', 'Z8', 'Z9']
-
-    #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
-    #expert_zones = list(np.random.choice(expert_zones, config['N_experts'], replace = False))
 
     ### Feature data for target location/zone  / meta features
-    
-    trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date']][:N_sample]
-    comb_trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date']][N_sample:]
-    testX_date = aggr_df[calendar_variables][config['split_date']:]
-    
+        
     # number of training observations for the combination model
     n_obs = len(comb_trainY)
     n_test_obs = len(testY)
@@ -1054,15 +1057,16 @@ for tup in tuple_list[row_counter:]:
     train_targetY = comb_trainY.values.reshape(-1)
     
     # Supervised learning set as tensors for PyTorch
-    tensor_trainY = torch.FloatTensor(train_targetY[:-800])
+    valid_obs = 1000
+    tensor_trainY = torch.FloatTensor(train_targetY[:-valid_obs])
     tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
-    tensor_train_p_list = [torch.FloatTensor(train_p_list[i][:-800]) for i in range(N_experts)]
+    tensor_train_p_list = [torch.FloatTensor(train_p_list[i][:-valid_obs]) for i in range(N_experts)]
 
-    tensor_validY = torch.FloatTensor(train_targetY[-800:])
-    tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-800:]) for i in range(N_experts)]
+    tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
+    tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
         
-    tensor_trainX = torch.FloatTensor(comb_trainX_date[:-800].values)
-    tensor_validX = torch.FloatTensor(comb_trainX_date[-800:].values)
+    tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
+    tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
     tensor_testX = torch.FloatTensor(testX_date.values)
     
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
@@ -1108,6 +1112,7 @@ for tup in tuple_list[row_counter:]:
 
         #% PyTorch layers
         #%
+        #%%        
         train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
         valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
 
@@ -1117,16 +1122,17 @@ for tup in tuple_list[row_counter:]:
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
         lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
                                      projection = True)
-        
+        print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
+        #%%
         if apply_softmax:
             lambda_static_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
         else:
             lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
         
-        
-        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
-        #lambda_static_dict['CRPS'] = lambda_crps
-        #%
+        #%%
+        lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
+        lambda_static_dict['CRPS'] = lambda_crps
+        #%%
         ##### Decision-focused combination for different values of gamma        
         for gamma in config['gamma_list']:
             
@@ -1144,12 +1150,12 @@ for tup in tuple_list[row_counter:]:
                 lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
         #%
         print(lambda_static_dict)
-        
+        #%%
         for m in list(lambda_static_dict.keys())[N_experts:]:
             plt.plot(lambda_static_dict[m], label = m)
         plt.legend()
         plt.show()
-        #%
+        #%%
         
         ### Adaptive combination model
         
@@ -1212,7 +1218,7 @@ for tup in tuple_list[row_counter:]:
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
                                                                      risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = learning_rate)
+            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 0.5e-2)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
                                                   optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
             
@@ -1223,7 +1229,7 @@ for tup in tuple_list[row_counter:]:
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), 
                                                                      gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = learning_rate)
+            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 0.5e-2)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
                                                   optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
 
@@ -1235,7 +1241,7 @@ for tup in tuple_list[row_counter:]:
         static_models = list(lambda_static_dict) 
         adaptive_models = list(adaptive_models_dict.keys())
         all_models = static_models + adaptive_models
-        
+        #%%
         lambda_adapt_dict = {}
         Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
         
@@ -1252,7 +1258,7 @@ for tup in tuple_list[row_counter:]:
 
         target_quant = np.arange(0.1, 1, 0.1).round(2)
         print('Estimating out-of-sample performance...')
-        for j, m in enumerate(all_models):
+        for j, m in enumerate([all_models]):
             print(m)
             if m in static_models:                
                 # Combine PDFs for each observation
@@ -1295,7 +1301,7 @@ for tup in tuple_list[row_counter:]:
         #plt.xticks(np.arange(len(target_quant)), target_quant)
         #plt.xlabel('Quantile')
         #plt.show()
-        
+        #%%
         print('Decision Cost')
         print(temp_Decision_cost[all_models].mean().round(4))
 
