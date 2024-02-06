@@ -589,8 +589,8 @@ def params():
                               'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
     
     
-    params['crit_quant'] = [0.2]
-    params['risk_aversion'] = [0.5]
+    params['crit_quant'] = [0.1]
+    params['risk_aversion'] = [0.2]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)

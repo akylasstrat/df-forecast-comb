@@ -112,11 +112,11 @@ def averaging_decisions(target_y, train_z_opt, problem,
         m.setObjective( (1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error) , gp.GRB.MINIMIZE)
     elif problem == 'pwl':
         
-        m.addConstr( pinball_loss_i >= 0.2*error)
+        m.addConstr( pinball_loss_i >= crit_fract*error)
         m.addConstr( pinball_loss_i >= (-0.5)*error)
-        m.addConstr( pinball_loss_i >= (-0.8)*(error + 0.3))
+        m.addConstr( pinball_loss_i >= (crit_fract - 1)*(error + 0.1))
     
-        m.setObjective( pinball_loss_i.sum(), gp.GRB.MINIMIZE)
+        m.setObjective( pinball_loss_i.sum() + risk_aversion*(error@error), gp.GRB.MINIMIZE)
         
     m.optimize()
     
@@ -486,13 +486,14 @@ def task_loss(pred, actual, problem, **kwargs):
     elif problem == 'pwl':
 
         deviation = actual_copy - pred_copy
+        square_loss = np.square(deviation)          
 
-        p1 = 0.2*deviation
+        p1 = kwargs['crit_quant']*deviation
         p2 = -0.5*deviation        
-        p3 = -0.8*(deviation + 0.3)
-
+        p3 = (kwargs['crit_quant']-1)*(deviation + 0.1)        
         pwl_loss = np.maximum.reduce([p1, p2, p3])        
-        return pwl_loss.mean()
+        return pwl_loss.mean() + kwargs['risk_aversion']*square_loss.mean()
+
 
     elif problem == 'reg_trad':
 
@@ -500,7 +501,7 @@ def task_loss(pred, actual, problem, **kwargs):
         pinball_loss = np.maximum(kwargs['crit_quant']*deviation, (kwargs['crit_quant']-1)*deviation)  
         square_loss = np.square(deviation)          
         
-        return (1- kwargs['risk_aversion'])*pinball_loss.mean() +  kwargs['risk_aversion']*square_loss.mean()
+        return (1- kwargs['risk_aversion'])*pinball_loss.mean() + kwargs['risk_aversion']*square_loss.mean()
         
 def solve_opt_prob(scenarios, weights, problem, **kwargs):
     ''' Solves stochastic optimization problem
@@ -683,11 +684,11 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
 
             m.addConstr(deviation == (target_scen - offer) )
             
-            m.addConstr(loss >= 0.2*(deviation) )
+            m.addConstr(loss >= crit_quant*(deviation) )
             m.addConstr(loss >= -0.5*(deviation) )
-            m.addConstr(loss >= -0.8*(deviation + 0.3) )
+            m.addConstr(loss >= (crit_quant-1)*(deviation + 0.1) )
             
-            m.setObjective( (1-risk_aversion)*(weights@loss), gp.GRB.MINIMIZE)
+            m.setObjective( (weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
             m.optimize()
                 
             return offer.X
@@ -708,13 +709,13 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
             # constraints
             m.addConstr(deviation == (target_scen - offer) )
 
-            m.addConstr(loss >= 0.2*(deviation) )
+            m.addConstr(loss >= crit_quant*(deviation) )
             m.addConstr(loss >= -0.5*(deviation) )
-            m.addConstr(loss >= -0.8*(deviation + 0.3) )
+            m.addConstr(loss >= (crit_quant-1)*(deviation + 0.1) )
             m.setObjective( t, gp.GRB.MINIMIZE)
             
             for row in range(len(weights)):
-                c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) )
+                c1 = m.addConstr(t >= (weights[row]@loss) + risk_aversion*(deviation@(deviation*weights[row])))
 
                 m.optimize()                
                 m.remove(c1)                
@@ -763,13 +764,13 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'pwl' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1]
     
     
-    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
-    params['risk_aversion'] = [0.5]
+    params['crit_quant'] = [0.1]
+    params['risk_aversion'] = [0.2]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
@@ -846,7 +847,7 @@ critical_fractile = config['crit_quant'][0]
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
     tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'])]
-elif target_problem == 'reg_trad':
+elif (target_problem == 'reg_trad') or (target_problem == 'pwl'):
     tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
                                                    config['risk_aversion'])]
 
@@ -952,21 +953,31 @@ for tup in tuple_list[row_counter:]:
         
         train_w_dict['cart'] = cart_find_weights(trainX_weather, comb_trainX_weather, cart_model)
         test_w_dict['cart'] = cart_find_weights(trainX_weather, testX_weather, cart_model)
-    
+        
+        #%%
         # CART 2: date predictors
         
         cart_parameters = {'max_depth':[5, 10, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
         cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
         
-        cart_model_cv.fit(trainX_date, trainY.values)    
+        trainX_cart2 = trainX_date.copy()
+        comb_trainX_cart2 = comb_trainX_date.copy()
+        testX_cart2 = testX_date.copy()
+        
+        trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['start_date']:config['split_date_prob']]
+        comb_trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
+        testX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_comb']:]
+                
+        cart_model_cv.fit(trainX_cart2, trainY.values)    
             
         cart_model = cart_model_cv.best_estimator_
         
-        #probabilistic_models['cart_date'] = cart_model_cv.best_estimator_
+        probabilistic_models['cart_date'] = cart_model_cv.best_estimator_
         
-        #train_w_dict['cart_date'] = cart_find_weights(trainX_date, comb_trainX_date, cart_model)
-        #test_w_dict['cart_date'] = cart_find_weights(trainX_date, testX_date, cart_model)
-    
+        train_w_dict['cart_date'] = cart_find_weights(trainX_cart2, comb_trainX_cart2, cart_model)
+        test_w_dict['cart_date'] = cart_find_weights(trainX_cart2, testX_cart2, cart_model)
+        
+        #%%
         # Random Forest
     
         rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 
@@ -983,7 +994,7 @@ for tup in tuple_list[row_counter:]:
     
         train_w_dict['rf'] = forest_find_weights(trainX_weather, comb_trainX_weather, rf_model)
         test_w_dict['rf'] = forest_find_weights(trainX_weather, testX_weather, rf_model)
-        
+        #%%
         #
         ## Climatology forecast
         #train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
@@ -1030,7 +1041,7 @@ for tup in tuple_list[row_counter:]:
         #plt.plot(100*pinball(test_q_pred, testY[target_zone].values, target_quant).round(4), label = 'QR reg')
         plt.legend()
         plt.show()
-    
+        
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -1043,8 +1054,8 @@ for tup in tuple_list[row_counter:]:
             plt.fill_between(np.arange(50), F_inv[i][200:250,0], F_inv[i][200:250,-1], alpha = .3, label = learner)
         plt.legend()
         plt.show()
-    
-        #%
+        
+        
         ### Define the rest of the supervised learning parameters     
         # projection step (used for gradient-based methods)
         
@@ -1052,7 +1063,7 @@ for tup in tuple_list[row_counter:]:
         #y_hat = cp.Parameter(N_experts)
         #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
         N_experts = len(all_learners)
-    
+    #%%
     train_targetY = comb_trainY.values.reshape(-1)
     
     # Supervised learning set as tensors for PyTorch
@@ -1106,29 +1117,32 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['Insample'] = lambda_tuned_inv    
     lambda_static_dict['SalvaBench'] = lambda_
 
-
-    #% PyTorch layers
-    #%%        
+    
+    #% CRPS learning
+    
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
-
-    #### CRPS minimization/ with torch layer
-    lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                           apply_softmax = True)
-    optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-    lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-                                 projection = True)
-    print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
-    #%%
-    if apply_softmax:
-        lambda_static_dict['CRPS'] = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-    else:
-        lambda_static_dict['CRPS'] = to_np(lpool_crps_model.weights)
     
-    #%%
-    #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
-    #lambda_static_dict['CRPS'] = lambda_crps
-    #%%
+    if row_counter == 0:
+        #### CRPS minimization/ with torch layer
+        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
+                                               apply_softmax = True)
+        optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
+        lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
+                                     projection = True)
+        print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
+
+        if apply_softmax:
+            lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
+        else:
+            lambda_crps = to_np(lpool_crps_model.weights)
+    
+        
+        lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
+        
+    lambda_static_dict['CRPS'] = lambda_crps
+    
+    #%
     ##### Decision-focused combination for different values of gamma        
     for gamma in config['gamma_list']:
         
@@ -1149,7 +1163,7 @@ for tup in tuple_list[row_counter:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
-    #%%
+    #%
         
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
@@ -1228,7 +1242,7 @@ for tup in tuple_list[row_counter:]:
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
 
-    #%% Evaluate performance for all models
+    #% Evaluate performance for all models
     #%
     static_models = list(lambda_static_dict) 
     adaptive_models = list(adaptive_models_dict.keys())
@@ -1268,8 +1282,10 @@ for tup in tuple_list[row_counter:]:
         print(m)
             
         # Estimate task-loss for specific model
+        #%
         temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY.values, 
                                           target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+        #%
         print(m)
         
         # Evaluate QS (approximation of CRPS) for each model
@@ -1293,7 +1309,7 @@ for tup in tuple_list[row_counter:]:
     #plt.xticks(np.arange(len(target_quant)), target_quant)
     #plt.xlabel('Quantile')
     #plt.show()
-    #%%
+    #%
     print('Decision Cost')
     print(temp_Decision_cost[all_models].mean().round(4))
 

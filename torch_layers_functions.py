@@ -183,7 +183,7 @@ class AdaptiveLinearPoolDecisions(nn.Module):
         
 class AdaptiveLinearPoolNewsvendorLayer(nn.Module):        
     def __init__(self, input_size, hidden_sizes, output_size, 
-                 support, gamma, activation=nn.ReLU(), apply_softmax = True, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
+                 support, gamma, problem = 'reg_trad', activation=nn.ReLU(), apply_softmax = True, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
         super(AdaptiveLinearPoolNewsvendorLayer, self).__init__()
         """
         Adaptive forecast combination for newsvendor problem> predicts combination weights given features
@@ -203,6 +203,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         self.apply_softmax = apply_softmax
         self.regularizer = regularizer
         self.crit_fract = critic_fract
+        self.problem = problem
         
         # create sequential MLP model to predict combination weights
         layer_sizes = [input_size] + hidden_sizes + [output_size]
@@ -217,34 +218,58 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
             self.model.add_module('softmax', nn.Softmax())
                     
         n_locations = len(self.support)
-        # newsvendor layer (for i-th observation)
-        z = cp.Variable((1))    
-        pinball_loss = cp.Variable(n_locations)
-        error = cp.Variable(n_locations)
-        #sq_error = cp.Variable(n_locations)
 
-        prob_weights = cp.Parameter(n_locations)
-        sqrt_prob_weights = cp.Parameter(n_locations)
+        if self.problem == 'reg_trad':
+            # newsvendor layer (for i-th observation)
+            z = cp.Variable((1))    
+            pinball_loss = cp.Variable(n_locations)
+            error = cp.Variable(n_locations)
+            prob_weights = cp.Parameter(n_locations)
+            sqrt_prob_weights = cp.Parameter(n_locations)
+
+            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
+                                 pinball_loss >= self.crit_fract*(error), 
+                                 pinball_loss >= (self.crit_fract - 1)*(error)]
             
-        newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                             pinball_loss >= self.crit_fract*(error), 
-                             pinball_loss >= (self.crit_fract - 1)*(error)]
-        
-        newsv_cost = prob_weights@pinball_loss
-        
-        # define aux variable
-        #sq_error = cp.power(error, 2)
-        w_error = cp.multiply(sqrt_prob_weights, error)
-        l2_regularization = cp.sum_squares(w_error)
+            newsv_cost = prob_weights@pinball_loss
+            
+            # define aux variable
+            #w_error = cp.multiply(prob_weights, error)
+            #sq_error = cp.power(error, 2)
+            w_error = cp.multiply(sqrt_prob_weights, error)
+            l2_regularization = cp.sum_squares(w_error)
+    
+            #l2_regularization = (prob_weights@sq_error)
+    
+            objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
+            
+            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
+            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
+                                               variables = [z, pinball_loss, error] )
+        elif self.problem == 'pwl':
+            # newsvendor layer (for i-th observation)
+            z = cp.Variable((1))    
+            pwl_loss = cp.Variable(n_locations)
+            error = cp.Variable(n_locations)
+            prob_weights = cp.Parameter(n_locations)
+            sqrt_prob_weights = cp.Parameter(n_locations)
 
-        #l2_regularization = self.risk_aversion*(w_error@w_error)
+            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
+                                 pwl_loss >= self.crit_fract*(error),
+                                 pwl_loss >= -0.5*(error),
+                                 pwl_loss >= (1-self.crit_fract)*(error + 0.1)]
+            
+            newsv_cost = prob_weights@pwl_loss
+            
+            w_error = cp.multiply(sqrt_prob_weights, error)
+            l2_regularization = cp.sum_squares(w_error)
 
-        objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*self.risk_aversion*l2_regularization ) 
-        
-        newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
-                                           variables = [z, pinball_loss, error] )
-        
+            objective_funct = cp.Minimize( newsv_cost + (self.risk_aversion)*l2_regularization)             
+            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
+            
+            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
+                                               variables = [z, pwl_loss, error] )
+            
     def forward(self, x, list_inputs):
         """
         Forward pass of the newvendor layer.
@@ -272,7 +297,9 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
         
         # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
+        if (self.problem == 'reg_trad') or (self.problem == 'pwl'):
+            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
+
         return combined_pdf, cvxpy_output
 
     def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = False, relative_tolerance = 0):
@@ -313,12 +340,19 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 error_hat = (y_batch.reshape(-1,1) - z_hat)
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
                 sql2_loss = torch.square(error_hat).sum()
                 
-                # Total regret (scale CRPS for better trade-off control)
-                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                    + self.gamma*crps_i/len(self.support)
+                if self.problem == 'reg_trad':
+                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
+                        + self.gamma*crps_i/len(self.support)
+
+                elif self.problem == 'pwl':
+                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum((-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
                 
                 # backward pass
                 loss.backward()
@@ -376,13 +410,23 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 error_hat = (y_batch.reshape(-1,1) - z_hat)
 
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
                 sql2_loss = torch.square(error_hat).sum()
                 
-                # Total regret (scale CRPS for better trade-off control)
-                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                    + self.gamma*crps_i/len(self.support)
+                if self.problem == 'reg_trad':
+                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
+                        + self.gamma*crps_i/len(self.support)
 
+                elif self.problem == 'pwl':
+                    #pwl_loss >= 0.2*(error),
+                    #pwl_loss >= -0.5*(error),
+                    #pwl_loss >= -0.8*(error + 0.3)]                                        
+                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum((-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
+                    
                 total_loss += loss.item()
                 
         average_loss = total_loss / len(data_loader)
@@ -433,7 +477,6 @@ class LinearPoolNewsvendorLayer(nn.Module):
             l2_regularization = cp.sum_squares(w_error)
     
             #l2_regularization = (prob_weights@sq_error)
-    
             objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
             
             newsv_problem = cp.Problem(objective_funct, newsv_constraints)
@@ -445,18 +488,20 @@ class LinearPoolNewsvendorLayer(nn.Module):
             pwl_loss = cp.Variable(n_locations)
             error = cp.Variable(n_locations)
             prob_weights = cp.Parameter(n_locations)
-            
+            sqrt_prob_weights = cp.Parameter(n_locations)
+
             newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                                 pwl_loss >= 0.2*(error),
+                                 pwl_loss >= self.crit_fract*(error),
                                  pwl_loss >= -0.5*(error),
-                                 pwl_loss >= -0.8*(error + 0.3)]
+                                 pwl_loss >= (1-self.crit_fract)*(error + 0.1)]
             
-            newsv_cost = prob_weights@pwl_loss
-    
-            objective_funct = cp.Minimize( newsv_cost )             
+            w_error = cp.multiply(sqrt_prob_weights, error)
+            l2_regularization = cp.sum_squares(w_error)
+
+            objective_funct = cp.Minimize( prob_weights@pwl_loss + self.risk_aversion*l2_regularization)             
             newsv_problem = cp.Problem(objective_funct, newsv_constraints)
             
-            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights],
+            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
                                                variables = [z, pwl_loss, error] )
 
     def forward(self, list_inputs):
@@ -482,10 +527,8 @@ class LinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        if self.problem == 'reg_trad':
+        if (self.problem == 'reg_trad') or (self.problem == 'pwl'):
             cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
-        elif self.problem == 'pwl':
-            cvxpy_output = self.newsvendor_layer(combined_pdf)
             
         return combined_pdf, cvxpy_output
     
@@ -527,15 +570,23 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
                 # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
                 error_hat = (y_batch.reshape(-1,1) - z_hat)
-
+                
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
                 sql2_loss = torch.square(error_hat).sum()
                 
-                # Total regret (scale CRPS for better trade-off control)
-                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                    + self.gamma*crps_i/len(self.support)
-                
+                if self.problem == 'reg_trad':
+                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
+                        + self.gamma*crps_i/len(self.support)
+
+                elif self.problem == 'pwl':
+                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum( (-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
+                    
                 # backward pass
                 loss.backward()
                 optimizer.step()
@@ -604,16 +655,26 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
                 # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
                 error_hat = (y_batch.reshape(-1,1) - z_hat)
-
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                
                 sql2_loss = torch.square(error_hat).sum()
-                
-                # Total regret (scale CRPS for better trade-off control)
-                loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                    + self.gamma*crps_i/len(self.support)
-                
+
+                if self.problem == 'reg_trad':
+
+                    pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
+                    
+                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
+                        + self.gamma*crps_i/len(self.support)
+                    
+
+                elif self.problem == 'pwl':
+                    #pwl_loss >= 0.2*(error),
+                    #pwl_loss >= -0.5*(error),
+                    #pwl_loss >= -0.8*(error + 0.3)]                                        
+                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum((-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
 
                 total_loss += loss.item()
                 
