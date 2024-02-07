@@ -748,7 +748,7 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [3]
+    params['target_zone'] = [1]
     
     
     params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
