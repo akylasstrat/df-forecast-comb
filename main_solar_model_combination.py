@@ -745,9 +745,9 @@ def nn_params():
     'NN hyperparameters'
     nn_params = {}
     nn_params['patience'] = 10
-    nn_params['batch_size'] = 1000  
+    nn_params['batch_size'] = 512  
     nn_params['num_epochs'] = 1500
-    nn_params['learning_rate'] = 1e-1
+    nn_params['learning_rate'] = 1e-2
     nn_params['apply_softmax'] = True
     return nn_params
 
@@ -764,13 +764,13 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'pwl' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [1]
+    params['target_zone'] = [2]
     
     
-    params['crit_quant'] = [0.1]
-    params['risk_aversion'] = [0.2]
+    params['crit_quant'] = [0.2]
+    params['risk_aversion'] = [0.01]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
