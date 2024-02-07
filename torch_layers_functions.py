@@ -45,7 +45,7 @@ def create_data_loader(inputs, batch_size, num_workers=0, shuffle=True):
 
 class AdaptiveLinearPoolDecisions(nn.Module):        
     def __init__(self, input_size, hidden_sizes, output_size, 
-                 support, activation=nn.ReLU(), apply_softmax = True, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
+                 support, problem = 'reg_trad', activation=nn.ReLU(), apply_softmax = True, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
         super(AdaptiveLinearPoolDecisions, self).__init__()
         """
         Adaptive combination of decisions (Salva's benchmark)
@@ -64,7 +64,10 @@ class AdaptiveLinearPoolDecisions(nn.Module):
         self.apply_softmax = apply_softmax
         self.regularizer = regularizer
         self.crit_fract = critic_fract
+        self.problem = problem
         
+        if (self.problem == 'newsvendor'): self.risk_aversion = 0
+
         # create sequential MLP model to predict combination weights
         layer_sizes = [input_size] + hidden_sizes + [output_size]
         layers = []
@@ -122,12 +125,18 @@ class AdaptiveLinearPoolDecisions(nn.Module):
                 
                 # forward pass: combine forecasts and solve each newsvendor problem
                 z_comb_hat = self.forward(x_batch, z_opt_batch)
-                 
                 error_hat = (y_batch.reshape(-1,1) - z_comb_hat)
-
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
                 sql2_loss = torch.square(error_hat).sum()
-                loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss
+                
+                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
+                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss
+                    
+                elif self.problem == 'pwl':
+                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum((-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+                    # Total regret (scale CRPS for better trade-off control)
+                    loss = pwl_loss + self.risk_aversion*sql2_loss
                 
                 # backward pass
                 loss.backward()
@@ -163,13 +172,18 @@ class AdaptiveLinearPoolDecisions(nn.Module):
 
                 # forward pass: combine forecasts and solve each newsvendor problem
                 z_comb_hat = self.forward(x_batch, z_opt_batch)
-
-                
                 # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
                 error_hat = (y_batch.reshape(-1,1) - z_comb_hat)
-
-                pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
                 sql2_loss = torch.square(error_hat).sum()
+                
+                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
+                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss
+                    
+                elif self.problem == 'pwl':
+                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum((-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+                    loss = pwl_loss + self.risk_aversion*sql2_loss
+
                 loss = (1-self.risk_aversion)*pinball_loss + self.risk_aversion*sql2_loss
                 total_loss += loss.item()
                 
@@ -204,6 +218,8 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         self.regularizer = regularizer
         self.crit_fract = critic_fract
         self.problem = problem
+
+        if (self.problem == 'newsvendor'): self.risk_aversion = 0
         
         # create sequential MLP model to predict combination weights
         layer_sizes = [input_size] + hidden_sizes + [output_size]
@@ -219,7 +235,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                     
         n_locations = len(self.support)
 
-        if self.problem == 'reg_trad':
+        if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
             # newsvendor layer (for i-th observation)
             z = cp.Variable((1))    
             pinball_loss = cp.Variable(n_locations)
@@ -297,7 +313,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
         
         # Pass the combined output to the CVXPY layer
-        if (self.problem == 'reg_trad') or (self.problem == 'pwl'):
+        if (self.problem == 'reg_trad') or (self.problem == 'newsvendor') or (self.problem == 'pwl'):
             cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
 
         return combined_pdf, cvxpy_output
@@ -342,7 +358,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 sql2_loss = torch.square(error_hat).sum()
                 
-                if self.problem == 'reg_trad':
+                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
                     pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
                     
                     # Total regret (scale CRPS for better trade-off control)
@@ -412,7 +428,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 sql2_loss = torch.square(error_hat).sum()
                 
-                if self.problem == 'reg_trad':
+                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
                     pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
                     
                     # Total regret (scale CRPS for better trade-off control)
@@ -453,10 +469,11 @@ class LinearPoolNewsvendorLayer(nn.Module):
         self.regularizer = regularizer
         self.crit_fract = critic_fract
         self.problem = problem
-        
+        if (self.problem == 'newsvendor'): self.risk_aversion = 0
+
         n_locations = len(self.support)
         
-        if self.problem == 'reg_trad':
+        if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
             # newsvendor layer (for i-th observation)
             z = cp.Variable((1))    
             pinball_loss = cp.Variable(n_locations)
@@ -527,7 +544,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        if (self.problem == 'reg_trad') or (self.problem == 'pwl'):
+        if self.problem in ['reg_trad', 'newsvendor', 'pwl']:
             cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4))
             
         return combined_pdf, cvxpy_output
@@ -574,7 +591,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 sql2_loss = torch.square(error_hat).sum()
                 
-                if self.problem == 'reg_trad':
+                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
                     pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
                     
                     # Total regret (scale CRPS for better trade-off control)
@@ -658,10 +675,9 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
                 sql2_loss = torch.square(error_hat).sum()
 
-                if self.problem == 'reg_trad':
+                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
 
                     pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
-                    
                     
                     # Total regret (scale CRPS for better trade-off control)
                     loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \

@@ -10,13 +10,14 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 import sys, os
-import pickle
+#import pickle
 import gurobipy as gp
 import torch
 
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.model_selection import GridSearchCV
-from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.tree import DecisionTreeRegressor
 
 
 cd = os.path.dirname(__file__)  #Current directory
@@ -31,18 +32,17 @@ from sklearn.preprocessing import MinMaxScaler
 #from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
 #project_dir=Path(cd).parent.__str__()   #project_directory
 
-from EnsemblePrescriptiveTree import *
-from EnsemblePrescriptiveTree_OOB import *
-from optimization_functions import *
+#from EnsemblePrescriptiveTree import *
+#from EnsemblePrescriptiveTree_OOB import *
+#from optimization_functions import *
 
-from LinearDecisionTree import *
-from sklearn.neural_network import MLPRegressor
-from sklearn.tree import DecisionTreeRegressor
+#from LinearDecisionTree import *
+#from sklearn.neural_network import MLPRegressor
+#from sklearn.tree import DecisionTreeRegressor
 
 from utility_functions import *
 from optimal_transport_functions import *
 from torch_layers_functions import *
-
 from torch.utils.data import Dataset, DataLoader
 import torch
 
@@ -107,11 +107,9 @@ def averaging_decisions(target_y, train_z_opt, problem,
     
     if problem == 'reg_trad':
         m.addConstr( pinball_loss_i >= crit_fract*error)
-        m.addConstr( pinball_loss_i >= (crit_fract-1)*error)
-    
+        m.addConstr( pinball_loss_i >= (crit_fract-1)*error)    
         m.setObjective( (1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error) , gp.GRB.MINIMIZE)
     elif problem == 'pwl':
-        
         m.addConstr( pinball_loss_i >= crit_fract*error)
         m.addConstr( pinball_loss_i >= (-0.5)*error)
         m.addConstr( pinball_loss_i >= (crit_fract - 1)*(error + 0.1))
@@ -616,7 +614,7 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
                 
             return Prescriptions
     
-    elif problem == 'reg_trad':
+    elif (problem == 'reg_trad') or (problem == 'newsvendor'):
         # regularized newsvendor problem
         if weights.ndim == 1:
             # solve for a single problem instance
@@ -724,23 +722,7 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
         
     elif problem =='mse':
         return (target_scen@weights)
-    elif problem == 'newsvendor':
-        
-        m = gp.Model()
-        m.setParam('OutputFlag', 0)
-
-        # target variable
-        offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-        loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-                                
-        m.addConstr(loss >= crit_quant*(target_scen - offer) )
-        m.addConstr(loss >= (crit_quant-1)*(target_scen - offer) )
-        
-        m.setObjective( weights@loss, gp.GRB.MINIMIZE)
-        m.optimize()
-        
-        return offer.X        
-
+ 
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
@@ -764,12 +746,12 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2]
+    params['target_zone'] = [1]
     
     
-    params['crit_quant'] = [0.2]
+    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
     params['risk_aversion'] = [0.01]
     
     # approaches to map data to decisions
@@ -788,12 +770,15 @@ nn_hparam = nn_params()
 results_path = f'{cd}\\results\\solar_different_prob_models'
 data_path = f'{cd}\\data'
 
+
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
 #%% Data pre-processing
 zone_target = config['target_zone']
 aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
-problem = config['problem']
+target_problem = config['problem']
 
+filename_prefix = f'Z{zone_target[0]}_{target_problem}_'
+        
 del aggr_df['ZONEID']
 
 aggr_df['Hour'] = aggr_df.index.hour
@@ -837,16 +822,14 @@ aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
 #%%
 
 #!!!! Add randomization based on the iteration counter here
-
-target_problem = config['problem']
-
 train_forecast_model = False
 generate_forecasts = True
 critical_fractile = config['crit_quant'][0]
 
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'])]
+    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
+                                                   config['risk_aversion'])]
 elif (target_problem == 'reg_trad') or (target_problem == 'pwl'):
     tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
                                                    config['risk_aversion'])]
@@ -942,7 +925,6 @@ for tup in tuple_list[row_counter:]:
         probabilistic_models['knn'] = knn_model_cv.best_estimator_
 
         # CART 1: weather predictors
-        
         cart_parameters = {'max_depth':[5, 10, 20, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
         cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
         
@@ -1147,7 +1129,7 @@ for tup in tuple_list[row_counter:]:
     for gamma in config['gamma_list']:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                    gamma = gamma, problem = problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
+                                                    gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
                                                     apply_softmax = True, regularizer=None)
         
         optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
@@ -1327,9 +1309,9 @@ for tup in tuple_list[row_counter:]:
         mean_QS = pd.concat([mean_QS, temp_mean_QS], ignore_index = True)        
     
     if config['save']:
-        Decision_cost.to_csv(f'{results_path}\\Z{zone_target[0]}_{target_problem}_{critical_fractile}_Decision_cost.csv')
-        QS_df.to_csv(f'{results_path}\\Z{zone_target[0]}_{target_problem}_{critical_fractile}_QS.csv')
-        mean_QS.to_csv(f'{results_path}\\Z{zone_target[0]}_{target_problem}_{critical_fractile}_mean_QS.csv')
+        Decision_cost.to_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv')
+        QS_df.to_csv(f'{results_path}\\{filename_prefix}_QS.csv')
+        mean_QS.to_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv')
 
         #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
     
