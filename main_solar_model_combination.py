@@ -729,7 +729,7 @@ def nn_params():
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
     nn_params['num_epochs'] = 1500
-    nn_params['learning_rate'] = 1e-1
+    nn_params['learning_rate'] = 1e-2
     nn_params['apply_softmax'] = True
     return nn_params
 
