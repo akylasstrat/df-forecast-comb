@@ -105,7 +105,7 @@ def averaging_decisions(target_y, train_z_opt, problem,
     # Task-loss function
     m.addConstr( error == target_y - z_comb)
     
-    if problem == 'reg_trad':
+    if (problem == 'reg_trad') or (problem == 'newsvendor'):
         m.addConstr( pinball_loss_i >= crit_fract*error)
         m.addConstr( pinball_loss_i >= (crit_fract-1)*error)    
         m.setObjective( (1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error) , gp.GRB.MINIMIZE)
@@ -729,7 +729,7 @@ def nn_params():
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
     nn_params['num_epochs'] = 1500
-    nn_params['learning_rate'] = 1e-2
+    nn_params['learning_rate'] = 1e-1
     nn_params['apply_softmax'] = True
     return nn_params
 
@@ -746,7 +746,7 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1]
     
