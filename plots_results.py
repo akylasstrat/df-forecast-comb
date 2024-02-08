@@ -62,20 +62,47 @@ def params():
 # Results for a single run (fixed S)
 
 config = params()
-problem = 'newsvendor'
 config['save'] = False
 target_prob = 'reg_trad'
 crit_fract = 0.9
 
-decision_cost = pd.read_csv(f'{cd}\\results\\different_prob_models\\{target_prob}_{crit_fract}_Decision_cost.csv', index_col = 0)
-qs_cost = pd.read_csv(f'{cd}\\results\\different_prob_models\\{target_prob}_{crit_fract}_QS.csv', index_col = 0)
+decision_cost = []
+qs_cost = []
+for z in ['Z1', 'Z2', 'Z3']:
+    decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
+    qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
+decision_cost = pd.concat(decision_cost)
+decision_cost.reset_index(inplace = True)
+qs_cost = pd.concat(qs_cost)
+qs_cost.reset_index(inplace = True)
+
+#%%
+gamma = [0, 0.1, 1]
+static_models = ['knn', 'cart','cart_date', 'rf', 'Ave', 'Insample', 'SalvaBench', 'CRPS'] + [f'DF_{g}' for g in gamma]
+solo_models = ['knn', 'cart','cart_date', 'rf']
+
+fig, ax  = plt.subplots()
+
+decision_cost.groupby('Quantile')[['SalvaBench','CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+plt.ylim()
+#%% Relative values compared to naive linear pooling (equal weights)
+rel_cost = decision_cost.copy()
+rel_cost[static_models] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models])/rel_cost['Ave'].values.reshape(-1,1)
+#%%
+fig, ax  = plt.subplots()
+rel_cost.query(f'Target==3').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+plt.ylim()
+#%%
+
+fig, ax  = plt.subplots()
+qs_cost.groupby(['Target', 'Quantile'])[solo_models].mean().plot(ax=ax)
+plt.ylim()
 
 #%%
 decision_cost = decision_cost.dropna()
 qs_cost = qs_cost.dropna()
 
-gamma = [0, 0.1, 1]
 single_models = [f'Model-{i}' for i in range(9)]
 single_models = ['knn', 'cart', 'rf']
 # extra column that contains the best-performing single expert
