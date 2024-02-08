@@ -746,13 +746,13 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'pwl' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [3]
+    params['target_zone'] = [2]
     
     
-    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
-    params['risk_aversion'] = [0.01]
+    params['crit_quant'] = [0.1]
+    params['risk_aversion'] = [0.1]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
