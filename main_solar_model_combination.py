@@ -746,13 +746,13 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'pwl' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2]
     
     
-    params['crit_quant'] = [0.1]
-    params['risk_aversion'] = [0.1]
+    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
+    params['risk_aversion'] = [0.2]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
@@ -776,6 +776,7 @@ aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse
 zone_target = config['target_zone']
 aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
 target_problem = config['problem']
+risk_aversion = config['risk_aversion']
 
 filename_prefix = f'Z{zone_target[0]}_{target_problem}_'
         
@@ -884,6 +885,15 @@ num_epochs = nn_hparam['num_epochs']
 learning_rate = nn_hparam['learning_rate']
 apply_softmax = nn_hparam['apply_softmax']
 row_counter = 0
+
+try:
+    Decision_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv', index_col = 0)
+    QS_df = pd.read_csv(f'{results_path}\\{filename_prefix}_QS.csv', index_col = 0)
+    mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
+except:
+    Decision_cost = pd.DataFrame()
+    QS_df = pd.DataFrame()
+    mean_QS = pd.DataFrame()
 
 #%%
 
@@ -1297,17 +1307,16 @@ for tup in tuple_list[row_counter:]:
 
     print('CRPS')
     print(temp_mean_QS[all_models].mean().round(4))
-    
-    if row_counter == 0: 
-        Decision_cost = temp_Decision_cost.copy()
-        QS_df = temp_QS.copy()            
-        mean_QS = temp_mean_QS.copy()
-        
-    else:
+            
+    try:
         Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)            
         QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
         mean_QS = pd.concat([mean_QS, temp_mean_QS], ignore_index = True)        
-    
+    except:
+        Decision_cost = temp_Decision_cost.copy()
+        QS_df = temp_QS.copy()            
+        mean_QS = temp_mean_QS.copy()
+
     if config['save']:
         Decision_cost.to_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv')
         QS_df.to_csv(f'{results_path}\\{filename_prefix}_QS.csv')
