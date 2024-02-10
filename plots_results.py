@@ -91,7 +91,7 @@ rel_cost = decision_cost.copy()
 rel_cost[static_models] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models])/rel_cost['Ave'].values.reshape(-1,1)
 #%%
 fig, ax  = plt.subplots()
-rel_cost.query(f'Target==3').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
 plt.ylim()
 #%%
 
