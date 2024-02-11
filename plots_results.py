@@ -91,8 +91,47 @@ rel_cost = decision_cost.copy()
 rel_cost[static_models] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models])/rel_cost['Ave'].values.reshape(-1,1)
 #%%
 fig, ax  = plt.subplots()
+rel_cost.query(f'Target==1 and risk_aversion == 0.01').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+plt.ylim()
+#%%
+fig, ax  = plt.subplots()
 rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
 plt.ylim()
+#%%
+rel_crps = qs_cost.copy()
+rel_crps[static_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models])/rel_crps['Ave'].values.reshape(-1,1)
+
+farm = [1,2,3]
+rho = 0.2
+models_plot = ['CRPS'] + [f'DF_{g}' for g in gamma]
+
+temp_crps_df = rel_crps.query(f'Target=={farm} and risk_aversion == {rho}')
+fig, ax  = plt.subplots()
+temp_crps_df.groupby(['Quantile'])[models_plot].mean().plot(kind = 'bar', ax=ax)
+plt.ylim([ temp_crps_df.groupby(['Quantile'])[models_plot].mean().values.min()-.01, 
+          temp_crps_df.groupby(['Quantile'])[models_plot].mean().values.max()+.01])
+plt.title('CRPS Improvement')
+plt.show()
+
+temp_cost_df = rel_cost.query(f'Target=={farm} and risk_aversion == {rho}')
+fig, ax  = plt.subplots()
+temp_cost_df.groupby(['Quantile'])[models_plot].mean().plot(kind = 'bar', ax=ax)
+plt.ylim([ temp_cost_df.groupby(['Quantile'])[models_plot].mean().values.min()-.01, 
+          temp_cost_df.groupby(['Quantile'])[models_plot].mean().values.max()+.01])
+plt.title('Decision Cost Improvement')
+plt.show()
+
+#%%
+color = ['tab:blue', 'tab:green', 'tab:brown', 'tab:orange', 'tab:purple', 'black']
+marker = ['s', 'o', 'd', '+', '1', '2']
+models_plot = ['CRPS'] + [f'DF_{g}' for g in gamma]
+
+for i,m in enumerate(models_plot):
+    plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), c = color[i], label = m, marker = marker[i])
+plt.legend()    
+plt.xlabel('Decision Cost Improvement(%)')
+plt.ylabel('CRPS Improvement (%)')
+plt.show()
 #%%
 
 fig, ax  = plt.subplots()

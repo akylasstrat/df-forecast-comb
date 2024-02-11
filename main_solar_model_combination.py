@@ -748,10 +748,10 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [3]
+    params['target_zone'] = [2]
     
     
-    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
+    params['crit_quant'] = np.arange(0.3, 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
     
     # approaches to map data to decisions
@@ -1019,10 +1019,10 @@ for tup in tuple_list[row_counter:]:
             CRPS = np.square(temp_CDF - H_i).mean()
     
             print(f'{m}:{CRPS}')
-        
+        #%%
         # estimate QS
         print('QS')
-        target_quant = np.arange(.05, 1, .05)
+        target_quant = np.arange(.01, 1, .01)
         for j,m in enumerate(all_learners):
             temp_pdf = test_p_list[j]
     
@@ -1032,8 +1032,12 @@ for tup in tuple_list[row_counter:]:
             plt.plot(temp_qs, label = m)
         #plt.plot(100*pinball(test_q_pred, testY[target_zone].values, target_quant).round(4), label = 'QR reg')
         plt.legend()
+        plt.ylabel('Pinball loss')
+        plt.xlabel('Quantile')
+        plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
+        plt.savefig(f'{cd}\\plots\\pinball_loss_model.pdf')
         plt.show()
-        
+        #%%
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
