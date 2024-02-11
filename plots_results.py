@@ -91,11 +91,11 @@ rel_cost = decision_cost.copy()
 rel_cost[static_models] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models])/rel_cost['Ave'].values.reshape(-1,1)
 #%%
 fig, ax  = plt.subplots()
-rel_cost.query(f'Target==1 and risk_aversion == 0.01').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+rel_cost.query(f'Target==3 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
 plt.ylim()
 #%%
 fig, ax  = plt.subplots()
-rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+rel_cost.query(f'Target==3 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
 plt.ylim()
 #%%
 rel_crps = qs_cost.copy()
@@ -125,12 +125,14 @@ plt.show()
 color = ['tab:blue', 'tab:green', 'tab:brown', 'tab:orange', 'tab:purple', 'black']
 marker = ['s', 'o', 'd', '+', '1', '2']
 models_plot = ['CRPS'] + [f'DF_{g}' for g in gamma]
+labels = ['$\mathtt{CRPSL}$'] + ['$\mathtt{DFL}-$0', '$\mathtt{DFL}-$0.1', '$\mathtt{DFL}-$1']
 
 for i,m in enumerate(models_plot):
-    plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), c = color[i], label = m, marker = marker[i])
+    plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), c = color[i], label = labels[i], marker = marker[i])
 plt.legend()    
-plt.xlabel('Decision Cost Improvement(%)')
+plt.xlabel('Decision Cost Improvement (%)')
 plt.ylabel('CRPS Improvement (%)')
+plt.savefig(f'{cd}//plots//cost_CRPS_tradeoff.pdf')
 plt.show()
 #%%
 
