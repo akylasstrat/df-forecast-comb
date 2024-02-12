@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Decision-Focused Forecast Combination/ main script/ second experimental setup: different probabilistic forecasting models for the same location/ solar plants example
+Solar combination/ adaptive
 
-@author: a.stratigakos
+@author: astratig
 """
 
 import pandas as pd
@@ -28,17 +28,6 @@ from gurobi_ml import add_predictor_constr
 #from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 #from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import MinMaxScaler
-
-#from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
-#project_dir=Path(cd).parent.__str__()   #project_directory
-
-#from EnsemblePrescriptiveTree import *
-#from EnsemblePrescriptiveTree_OOB import *
-#from optimization_functions import *
-
-#from LinearDecisionTree import *
-#from sklearn.neural_network import MLPRegressor
-#from sklearn.tree import DecisionTreeRegressor
 
 from utility_functions import *
 from optimal_transport_functions import *
@@ -729,7 +718,7 @@ def nn_params():
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
     nn_params['num_epochs'] = 1500
-    nn_params['learning_rate'] = 1e-2
+    nn_params['learning_rate'] = 5e-2
     nn_params['apply_softmax'] = True
     return nn_params
 
@@ -751,11 +740,8 @@ def params():
     params['target_zone'] = [1]
     
     
-    params['crit_quant'] = np.arange(0.3, 1, 0.1).round(2)
-    params['risk_aversion'] = [0.2]
-
-    params['train_static'] = False
-    params['train_adaptive'] = True
+    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
+    params['risk_aversion'] = [0.01, 0.2]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
@@ -826,6 +812,8 @@ aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
 #%%
 
 #!!!! Add randomization based on the iteration counter here
+train_forecast_model = False
+generate_forecasts = True
 critical_fractile = config['crit_quant'][0]
 
 if target_problem == 'newsvendor':
@@ -833,8 +821,7 @@ if target_problem == 'newsvendor':
     tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
                                                    config['risk_aversion'])]
 elif (target_problem == 'reg_trad') or (target_problem == 'pwl'):
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
-                                                   config['risk_aversion'])]
+    tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'], config['crit_quant'])]
 
 #%%
 # Set up some problem parameters
@@ -871,10 +858,19 @@ trainX_weather = aggr_df[weather_variables][config['start_date']:config['split_d
 comb_trainX_weather = aggr_df[weather_variables][config['split_date_prob']:config['split_date_comb']]
 testX_weather = aggr_df[weather_variables][config['split_date_comb']:]
 
+#%%
+from sklearn.preprocessing import OneHotEncoder
+
 trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date_prob']]
 comb_trainX_date = aggr_df[calendar_variables][config['split_date_prob']:config['split_date_comb']]
 testX_date = aggr_df[calendar_variables][config['split_date_comb']:]
 
+encoder = OneHotEncoder().fit(aggr_df[calendar_variables])
+
+trainX_onehot = encoder.transform(trainX_date).toarray()
+comb_trainX_onehot = encoder.transform(comb_trainX_date).toarray()
+testX_onehot = encoder.transform(testX_date).toarray()
+#%%
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
 
@@ -887,22 +883,17 @@ learning_rate = nn_hparam['learning_rate']
 apply_softmax = nn_hparam['apply_softmax']
 row_counter = 0
 
-try:
-    Decision_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv', index_col = 0)
-    QS_df = pd.read_csv(f'{results_path}\\{filename_prefix}_QS.csv', index_col = 0)
-    mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
-except:
-    Decision_cost = pd.DataFrame()
-    QS_df = pd.DataFrame()
-    mean_QS = pd.DataFrame()
+Decision_cost = pd.DataFrame()
+QS_df = pd.DataFrame()
+mean_QS = pd.DataFrame()
 
 #%%
 
 for tup in tuple_list[row_counter:]:
 
     target_zone = tup[0]    
-    critical_fractile = tup[1]
-    risk_aversion = tup[2]
+    critical_fractile = tup[2]
+    risk_aversion = tup[1]
         
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
     
@@ -1075,6 +1066,10 @@ for tup in tuple_list[row_counter:]:
     tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
     tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
     tensor_testX = torch.FloatTensor(testX_date.values)
+
+    tensor_trainX = torch.FloatTensor(comb_trainX_onehot[:-valid_obs])
+    tensor_validX = torch.FloatTensor(comb_trainX_onehot[-valid_obs:])
+    tensor_testX = torch.FloatTensor(testX_onehot)
     
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
     
@@ -1092,76 +1087,7 @@ for tup in tuple_list[row_counter:]:
         trainZopt[:,j] = temp_z_opt
 
     ###########% Static forecast combinations
-    lambda_static_dict = {}
-        
-    for i,learner in enumerate(all_learners):
-        temp_ind = np.zeros(N_experts)
-        temp_ind[i] = 1
-        lambda_static_dict[f'{learner}'] = temp_ind
-        
-    lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
-                
-    
-    # Set weights to in-sample performance
-    lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, problem = target_problem,
-                                                 crit_quant = critical_fractile, 
-                                                 support = y_supp, risk_aversion = risk_aversion)
-    
-    # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
-    lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile,
-                                  support = y_supp, bounds = False, risk_aversion = risk_aversion)
 
-    lambda_static_dict['Insample'] = lambda_tuned_inv    
-    lambda_static_dict['SalvaBench'] = lambda_
-
-    
-    #% CRPS learning
-    
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
-    
-    if row_counter == 0:
-        #### CRPS minimization/ with torch layer
-        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                               apply_softmax = True)
-        optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-        lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-                                     projection = True)
-        print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
-
-        if apply_softmax:
-            lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-        else:
-            lambda_crps = to_np(lpool_crps_model.weights)
-    
-        
-        lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
-        
-    lambda_static_dict['CRPS'] = lambda_crps
-    
-    #%
-    ##### Decision-focused combination for different values of gamma        
-    for gamma in config['gamma_list']:
-        
-        lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                    gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
-                                                    apply_softmax = True, regularizer=None)
-        
-        optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
-        
-        lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
-        if apply_softmax:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
-        else:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
-
-    for m in list(lambda_static_dict.keys())[N_experts:]:
-        plt.plot(lambda_static_dict[m], label = m)
-    plt.legend()
-    plt.show()
-    #%
-        
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
     # iv) create one for CRPS only (gamma == +inf)
@@ -1174,76 +1100,72 @@ for tup in tuple_list[row_counter:]:
     tensor_testZopt = torch.FloatTensor(testZopt)
     
     adaptive_models_dict = {}
+
+    ### CRPS/ Linear Regression
+    lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
+                                                      support = torch.FloatTensor(y_supp))        
+    optimizer = torch.optim.Adam(lr_lpool_crps_model.parameters(), lr = learning_rate)        
+    lr_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
+                                      patience = patience, projection = False)
+
+    adaptive_models_dict['CRPS-LR'] = lr_lpool_crps_model
+
+    ### CRPS/ MLP learner
     
-    adapt_models = False
-    if adapt_models:
-        ### CRPS/ Linear Regression
-        lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
-                                                          support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(lr_lpool_crps_model.parameters(), lr = learning_rate)        
-        lr_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
+    mlp_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], output_size = N_experts, support = torch.FloatTensor(y_supp))        
+    optimizer = torch.optim.Adam(mlp_lpool_crps_model.parameters(), lr = learning_rate)        
+    mlp_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
+                                      patience = patience, projection = False)
+
+    adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
+
+    ### Decision Combination/ LR
+    train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
+    valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size)
+
+
+    lr_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
+    optimizer = torch.optim.Adam(lr_lpool_decision_model.parameters(), lr = learning_rate)        
+    lr_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
+                                      patience = patience, projection = False)
+
+    adaptive_models_dict['SalvaBench-LR'] = lr_lpool_decision_model
+
+    mlp_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], 
+                                                           output_size = N_experts, support = torch.FloatTensor(y_supp))        
+    optimizer = torch.optim.Adam(mlp_lpool_decision_model.parameters(), lr = learning_rate)        
+    mlp_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
+                                      patience = patience, projection = False)
+
+    adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
     
-        adaptive_models_dict['CRPS-LR'] = lr_lpool_crps_model
-    
-        ### CRPS/ MLP learner
+    #%
+    for gamma in config['gamma_list']:
+                    
+        lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
+                                                                 output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
+                                                                 risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
         
-        mlp_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(mlp_lpool_crps_model.parameters(), lr = learning_rate)        
-        mlp_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
-    
-        ### Decision Combination/ LR
-        train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
-        valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size)
-    
-    
-        lr_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(lr_lpool_decision_model.parameters(), lr = 1e-3)        
-        lr_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['SalvaBench-LR'] = lr_lpool_decision_model
-    
-        mlp_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], 
-                                                               output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(mlp_lpool_decision_model.parameters(), lr = 1e-3)        
-        mlp_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
+        optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = learning_rate)
+        lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
+                                              optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
         
-        #%
-        for gamma in config['gamma_list']:
-                        
-            lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
-                                                                     output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
-                                                                     risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
-            
-            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 0.5e-2)
-            lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
-            
-            
-            adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
-    
-            mlp_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20,20,20], 
-                                                                     output_size = N_experts, support = torch.FloatTensor(y_supp), 
-                                                                     gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
-            
-            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 0.5e-2)
-            mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
-    
-            adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
+        
+        adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
+
+        mlp_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20,20,20], 
+                                                                 output_size = N_experts, support = torch.FloatTensor(y_supp), 
+                                                                 gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
+        
+        optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = learning_rate)
+        mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
+                                              optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
+
+        adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
 
     #% Evaluate performance for all models
-    #%
-    static_models = list(lambda_static_dict) 
     adaptive_models = list(adaptive_models_dict.keys())
-    all_models = static_models + adaptive_models
+    all_models = adaptive_models
 
     lambda_adapt_dict = {}
     Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
@@ -1263,14 +1185,11 @@ for tup in tuple_list[row_counter:]:
     print('Estimating out-of-sample performance...')
     for j, m in enumerate(all_models):
         print(m)
-        if m in static_models:                
-            # Combine PDFs for each observation
-            temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
-        elif m in adaptive_models:
-            # For each model, predict combination weights
-            lambda_adapt_dict[m] = adaptive_models_dict[m].predict_weights(tensor_testX)
-            # Combine PDFs for each observation
-            temp_pdf = np.array([sum([lambda_adapt_dict[m][i,j]*test_p_list[j][i] for j in range(N_experts)]) for i in range(n_test_obs)])    
+
+        # For each model, predict combination weights
+        lambda_adapt_dict[m] = adaptive_models_dict[m].predict_weights(tensor_testX)
+        # Combine PDFs for each observation
+        temp_pdf = np.array([sum([lambda_adapt_dict[m][i,j]*test_p_list[j][i] for j in range(N_experts)]) for i in range(n_test_obs)])    
 
         temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion, 
                                             crit_quant = critical_fractile)
@@ -1323,9 +1242,9 @@ for tup in tuple_list[row_counter:]:
         mean_QS = temp_mean_QS.copy()
 
     if config['save']:
-        Decision_cost.to_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv')
-        QS_df.to_csv(f'{results_path}\\{filename_prefix}_QS.csv')
-        mean_QS.to_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv')
+        Decision_cost.to_csv(f'{results_path}\\adaptive_{filename_prefix}_Decision_cost.csv')
+        QS_df.to_csv(f'{results_path}\\adaptive_{filename_prefix}_QS.csv')
+        mean_QS.to_csv(f'{results_path}\\adaptive_{filename_prefix}_mean_QS.csv')
 
         #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
     
