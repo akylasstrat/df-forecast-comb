@@ -737,7 +737,7 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [1]
+    params['target_zone'] = [2]
     
     
     params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
@@ -870,6 +870,7 @@ encoder = OneHotEncoder().fit(aggr_df[calendar_variables])
 trainX_onehot = encoder.transform(trainX_date).toarray()
 comb_trainX_onehot = encoder.transform(comb_trainX_date).toarray()
 testX_onehot = encoder.transform(testX_date).toarray()
+
 #%%
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
@@ -1067,9 +1068,9 @@ for tup in tuple_list[row_counter:]:
     tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
     tensor_testX = torch.FloatTensor(testX_date.values)
 
-    tensor_trainX = torch.FloatTensor(comb_trainX_onehot[:-valid_obs])
-    tensor_validX = torch.FloatTensor(comb_trainX_onehot[-valid_obs:])
-    tensor_testX = torch.FloatTensor(testX_onehot)
+    #tensor_trainX = torch.FloatTensor(comb_trainX_onehot[:-valid_obs])
+    #tensor_validX = torch.FloatTensor(comb_trainX_onehot[-valid_obs:])
+    #tensor_testX = torch.FloatTensor(testX_onehot)
     
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
     
