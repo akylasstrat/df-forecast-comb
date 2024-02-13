@@ -737,11 +737,11 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2]
+    params['target_zone'] = [3]
     
     
     params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
-    params['risk_aversion'] = [0.01, 0.2]
+    params['risk_aversion'] = [0.2]
     
     # approaches to map data to decisions
     # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
@@ -780,10 +780,11 @@ weather_dict = {'VAR78':'tclw', 'VAR79': 'tciw', 'VAR134':'SP', 'VAR157':'rh',
 
 aggr_df = aggr_df.rename(columns = weather_dict)
 
-#solar_df['diurnal_1'] = np.sin(2*np.pi*(solar_df.index.hour+1)/24)
-#solar_df['diurnal_2'] = np.cos(2*np.pi*(solar_df.index.hour+1)/24)
-#solar_df['diurnal_3'] = np.sin(4*np.pi*(solar_df.index.hour+1)/24)
-#solar_df['diurnal_4'] = np.cos(4*np.pi*(solar_df.index.hour+1)/24)
+#aggr_df['diurnal_2'] = np.cos(2*np.pi*(aggr_df.index.hour+1)/24)
+#aggr_df['diurnal_3'] = np.sin(4*np.pi*(aggr_df.index.hour+1)/24)
+#aggr_df['diurnal_4'] = np.cos(4*np.pi*(aggr_df.index.hour+1)/24)
+aggr_df['diurnal'] = np.maximum(np.sin(2*np.pi*(aggr_df.index.hour+3)/24), np.zeros(len(aggr_df)))
+aggr_df['month_cos'] = np.cos(2*np.pi*(aggr_df.index.month+1)/12)
 #%%
 for col in ['SSRD', 'STRD', 'TSR', 'TP']:
     if col != 'TP':
@@ -809,6 +810,7 @@ aggr_df['Month'] = aggr_df.index.month
 bool_ind = aggr_df.groupby('Hour').mean()['POWER'] == 0
 zero_hour = bool_ind.index.values[bool_ind.values]
 aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
+
 #%%
 
 #!!!! Add randomization based on the iteration counter here
@@ -840,10 +842,13 @@ predictor_names = list(aggr_df.columns)
 predictor_names.remove('POWER')
 
 weather_variables = ['tclw','tciw','SP','rh','tcc','10u','10v','2T','SSRD','STRD','TSR','TP']
-calendar_variables = ['Hour', 'Month']
-all_variables = weather_variables + calendar_variables
+calendar_ordinal_variables = ['Hour', 'Month']
+calendar_sine_variables = ['diurnal', 'month_cos']
+
+all_variables = weather_variables + calendar_ordinal_variables + calendar_sine_variables
 
 #%%
+from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
 
 feat_scaler = MinMaxScaler()
 feat_scaler.fit(aggr_df[all_variables][config['start_date']:config['split_date_comb']])
@@ -859,13 +864,16 @@ comb_trainX_weather = aggr_df[weather_variables][config['split_date_prob']:confi
 testX_weather = aggr_df[weather_variables][config['split_date_comb']:]
 
 #%%
-from sklearn.preprocessing import OneHotEncoder
 
-trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date_prob']]
-comb_trainX_date = aggr_df[calendar_variables][config['split_date_prob']:config['split_date_comb']]
-testX_date = aggr_df[calendar_variables][config['split_date_comb']:]
+trainX_date = aggr_df[calendar_ordinal_variables][config['start_date']:config['split_date_prob']]
+comb_trainX_date = aggr_df[calendar_ordinal_variables][config['split_date_prob']:config['split_date_comb']]
+testX_date = aggr_df[calendar_ordinal_variables][config['split_date_comb']:]
 
-encoder = OneHotEncoder().fit(aggr_df[calendar_variables])
+trainX_date_sine = aggr_df[calendar_sine_variables][config['start_date']:config['split_date_prob']]
+comb_trainX_date_sine = aggr_df[calendar_sine_variables][config['split_date_prob']:config['split_date_comb']]
+testX_date_sine = aggr_df[calendar_sine_variables][config['split_date_comb']:]
+
+encoder = OneHotEncoder().fit(aggr_df[calendar_ordinal_variables])
 
 trainX_onehot = encoder.transform(trainX_date).toarray()
 comb_trainX_onehot = encoder.transform(comb_trainX_date).toarray()
@@ -949,9 +957,9 @@ for tup in tuple_list[row_counter:]:
         comb_trainX_cart2 = comb_trainX_date.copy()
         testX_cart2 = testX_date.copy()
         
-        trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['start_date']:config['split_date_prob']]
-        comb_trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
-        testX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_comb']:]
+        trainX_cart2 = aggr_df[calendar_ordinal_variables+weather_variables][config['start_date']:config['split_date_prob']]
+        comb_trainX_cart2 = aggr_df[calendar_ordinal_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
+        testX_cart2 = aggr_df[calendar_ordinal_variables+weather_variables][config['split_date_comb']:]
                 
         cart_model_cv.fit(trainX_cart2, trainY.values)    
             
@@ -1064,9 +1072,13 @@ for tup in tuple_list[row_counter:]:
     tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
     tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
         
-    tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
-    tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
-    tensor_testX = torch.FloatTensor(testX_date.values)
+    #tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
+    #tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
+    #tensor_testX = torch.FloatTensor(testX_date.values)
+
+    tensor_trainX = torch.FloatTensor(comb_trainX_date_sine[:-valid_obs].values)
+    tensor_validX = torch.FloatTensor(comb_trainX_date_sine[-valid_obs:].values)
+    tensor_testX = torch.FloatTensor(testX_date_sine.values)
 
     #tensor_trainX = torch.FloatTensor(comb_trainX_onehot[:-valid_obs])
     #tensor_validX = torch.FloatTensor(comb_trainX_onehot[-valid_obs:])

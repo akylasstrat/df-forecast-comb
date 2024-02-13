@@ -746,7 +746,7 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'pwl' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1]
     
