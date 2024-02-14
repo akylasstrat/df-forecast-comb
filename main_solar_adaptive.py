@@ -740,7 +740,7 @@ def params():
     params['target_zone'] = [3]
     
     
-    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
+    params['crit_quant'] = np.arange(0.5, 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
     
     # approaches to map data to decisions
@@ -895,6 +895,15 @@ row_counter = 0
 Decision_cost = pd.DataFrame()
 QS_df = pd.DataFrame()
 mean_QS = pd.DataFrame()
+
+try:
+    Decision_cost = pd.read_csv(f'{results_path}\\adaptive_{filename_prefix}_Decision_cost.csv', index_col = 0)
+    QS_df = pd.read_csv(f'{results_path}\\adaptive_{filename_prefix}_QS.csv', index_col = 0)
+    mean_QS = pd.read_csv(f'{results_path}\\adaptive_{filename_prefix}_mean_QS.csv', index_col = 0)
+except:
+    Decision_cost = pd.DataFrame()
+    QS_df = pd.DataFrame()
+    mean_QS = pd.DataFrame()
 
 #%%
 
