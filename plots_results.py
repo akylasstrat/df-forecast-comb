@@ -61,7 +61,6 @@ def params():
 #%%%%%%%%%%%%%%%%%
 # Results for a single run (fixed S)
 
-#%%
 '''
 target_prob = 'reg_trad'
 
@@ -95,12 +94,12 @@ for z in ['Z1', 'Z2', 'Z3']:
 #%%
 config = params()
 config['save'] = False
-target_prob = 'reg_trad'
+target_prob = 'pwl'
 crit_fract = 0.9
 
 decision_cost = []
 qs_cost = []
-for z in ['Z1', 'Z2', 'Z3']:
+for z in ['Z1', 'Z2']:
     decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
     qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
@@ -121,22 +120,22 @@ decision_cost.groupby('Quantile')[['SalvaBench','CRPS'] + [f'DF_{g}' for g in ga
 plt.ylim()
 #%% Relative values compared to naive linear pooling (equal weights)
 rel_cost = decision_cost.copy()
-rel_cost[static_models + adaptive_models] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models + adaptive_models])/rel_cost['Ave'].values.reshape(-1,1)
+rel_cost[static_models ] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models ])/rel_cost['Ave'].values.reshape(-1,1)
 #%%
 fig, ax  = plt.subplots()
-rel_cost.query(f'Target==3 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
 plt.ylim()
 #%%
 fig, ax  = plt.subplots()
-rel_cost.query(f'Target==3 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
+rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
 plt.ylim()
 #%%
 rel_crps = qs_cost.copy()
-rel_crps[static_models+adaptive_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models+adaptive_models])/rel_crps['Ave'].values.reshape(-1,1)
-
-farm = [1,2,3]
+rel_crps[static_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models])/rel_crps['Ave'].values.reshape(-1,1)
+#%%
+farm = [1,2]
 rho = 0.2
-models_plot = static_models + adaptive_models
+models_plot = static_models
 
 temp_crps_df = rel_crps.query(f'Target=={farm} and risk_aversion == {rho}')
 fig, ax  = plt.subplots()
@@ -167,7 +166,7 @@ for i,m in enumerate(models_plot):
 plt.legend()    
 plt.xlabel('Decision Cost Improvement (%)')
 plt.ylabel('CRPS Improvement (%)')
-#plt.savefig(f'{cd}//plots//cost_CRPS_tradeoff.pdf')
+plt.savefig(f'{cd}//plots//pwl_cost_CRPS_tradeoff.pdf')
 plt.show()
 
 color = ['tab:blue', 'tab:green', 'tab:brown', 'tab:orange', 'tab:purple', 'black']
