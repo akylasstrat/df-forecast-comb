@@ -1045,7 +1045,7 @@ for tup in tuple_list[row_counter:]:
         plt.ylabel('Pinball loss')
         plt.xlabel('Quantile')
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
-        plt.savefig(f'{cd}\\plots\\pinball_loss_model.pdf')
+        #plt.savefig(f'{cd}\\plots\\pinball_loss_model.pdf')
         plt.show()
         #%%
         #% Visualize some prob. forecasts for sanity check
