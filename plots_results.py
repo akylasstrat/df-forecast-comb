@@ -94,12 +94,12 @@ for z in ['Z1', 'Z2', 'Z3']:
 #%%
 config = params()
 config['save'] = False
-target_prob = 'pwl'
+target_prob = 'reg_trad'
 crit_fract = 0.9
 
 decision_cost = []
 qs_cost = []
-for z in ['Z1', 'Z2']:
+for z in ['Z1', 'Z2', 'Z3']:
     decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
     qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
@@ -120,7 +120,7 @@ decision_cost.groupby('Quantile')[['SalvaBench','CRPS'] + [f'DF_{g}' for g in ga
 plt.ylim()
 #%% Relative values compared to naive linear pooling (equal weights)
 rel_cost = decision_cost.copy()
-rel_cost[static_models ] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models ])/rel_cost['Ave'].values.reshape(-1,1)
+rel_cost[static_models + adaptive_models] = (rel_cost['Ave'].values.reshape(-1,1)-rel_cost[static_models + adaptive_models])/rel_cost['Ave'].values.reshape(-1,1)
 #%%
 fig, ax  = plt.subplots()
 rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CRPS'] + [f'DF_{g}' for g in gamma]].mean().plot(kind = 'bar', ax=ax)
@@ -131,9 +131,9 @@ rel_cost.query(f'Target==2 and risk_aversion == 0.2').groupby(['Quantile'])[['CR
 plt.ylim()
 #%%
 rel_crps = qs_cost.copy()
-rel_crps[static_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models])/rel_crps['Ave'].values.reshape(-1,1)
+rel_crps[static_models + adaptive_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models + adaptive_models])/rel_crps['Ave'].values.reshape(-1,1)
 #%%
-farm = [1,2]
+farm = [1, 2, 3]
 rho = 0.2
 models_plot = static_models
 
@@ -166,21 +166,22 @@ for i,m in enumerate(models_plot):
 plt.legend()    
 plt.xlabel('Decision Cost Improvement (%)')
 plt.ylabel('CRPS Improvement (%)')
-plt.savefig(f'{cd}//plots//pwl_cost_CRPS_tradeoff.pdf')
+#plt.savefig(f'{cd}//plots//pwl_cost_CRPS_tradeoff.pdf')
 plt.show()
 
 color = ['tab:blue', 'tab:green', 'tab:brown', 'tab:orange', 'tab:purple', 'black']
 marker = ['s', 'o', 'd', '+', '1', '2']
-models_plot = ['CRPS-LR'] + [f'DF-LR_{g}' for g in gamma] 
+models_plot = ['CRPS-MLP'] + [f'DF-MLP_{g}' for g in gamma] 
 #models_plot = ['CRPS-MLP'] + [f'DF-MLP_{g}' for g in gamma] 
-labels = ['$\mathtt{CRPSL}$'] + ['$\mathtt{DFL}-$0', '$\mathtt{DFL}-$0.1', '$\mathtt{DFL}-$1']
+labels = ['$\mathtt{CRPSL-MLP}$'] + ['$\mathtt{DFL-MLP}-$0', '$\mathtt{DFL-MLP}-$0.1',
+                                    '$\mathtt{DFL-MLP}-$1']
 
 for i,m in enumerate(models_plot):
     plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), label = labels[i], marker = marker[i], color = color[i])
 plt.legend()    
 plt.xlabel('Decision Cost Improvement (%)')
 plt.ylabel('CRPS Improvement (%)')
-#plt.savefig(f'{cd}//plots//cost_CRPS_tradeoff.pdf')
+plt.savefig(f'{cd}//plots//reg_trad_MLP_cost_CRPS_tradeoff.pdf')
 plt.show()
 
 #%%
