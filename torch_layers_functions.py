@@ -481,7 +481,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
             prob_weights = cp.Parameter(n_locations)
             sqrt_prob_weights = cp.Parameter(n_locations)
 
-            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
+            newsv_constraints =  [error == self.support - z,
                                  pinball_loss >= self.crit_fract*(error), 
                                  pinball_loss >= (self.crit_fract - 1)*(error)]
             

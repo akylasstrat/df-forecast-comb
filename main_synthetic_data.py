@@ -263,10 +263,10 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
             m.setParam('OutputFlag', 0)
 
             # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
+            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
             deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
             loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
+            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'aux')
             
             # constraints
             m.addConstr(deviation == (target_scen - offer) )
@@ -428,17 +428,12 @@ def params():
     return params
 
 #%%
-    
+   
 config = params()
-hyperparam = tree_params()
 nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\synthetic_data'
 data_path = f'{cd}\\data'
-
-#%%
-
-Y = np.random.normal(size = 1000) + 
 
 #%%
 from scipy.stats import norm
@@ -447,18 +442,343 @@ import scipy
 
 nobs = 1000
 alpha_1 = 1
-alpha_2 = 1
+alpha_2 = 1.1
 alpha_3 = 1.1
 
-X0 = np.random.normal(size = 1000)
-X1 = np.random.normal(size = 1000)
-X2 = np.random.normal(size = 1000)
-X3 = np.random.normal(size = 1000)
-error = np.random.normal(size = 1000)
+threshold = -1
 
-Y_clean = X0 + alpha_1*X1 + alpha_2*X2 + alpha_3*X3 + error
-Y = X0 + alpha_1*X1 + alpha_2*X2 + alpha_3*X3 + (alpha_1*X1 + alpha_2*X2 + alpha_3*X3 < -2)*(-5) + error
+X0 = np.random.normal(size = 1000).round(1)
+X1 = np.random.normal(size = 1000).round(1)
+X2 = np.random.normal(size = 1000).round(1)
+X3 = np.random.normal(size = 1000).round(1)
+error = np.random.normal(size = 1000).round(1)
 
+Y_normal = (X0 + alpha_1*X1 + alpha_2*X2 + alpha_3*X3 + error).round(1)
+
+Y_tail = Y_normal + (alpha_3*X3 < threshold)*(-7)
+
+y_supp = np.arange(-15, 10, 0.1)
+n_locs = len(y_supp)
+target_quant = np.arange(0.01, 1, 0.01).round(2)
+
+#%%
+
+f_tail = (alpha_1*X1 + alpha_2*X2 + alpha_3*X3 -5)*(-5)
+#f1 = norm(loc = X0 + alpha_1*X1, scale = 1 + alpha_2**2 + alpha_3**2)
+
+# Expert 1: calibrated probabilistic forecast except for left tail
+p1_hat = np.zeros((nobs, n_locs))
+F1_hat = np.zeros((nobs, n_locs))
+Q1_hat = np.zeros((nobs, len(target_quant)))
+
+for i in range(nobs):
+    # define probabilistic forecast
+    f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i], scale = 1 + alpha_2**2 + alpha_3**2)
+    
+    temp_mu = X0[i] + alpha_1*X1[i]
+    temp_scale = 1 + alpha_2**2 + alpha_3**2
+    
+    p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
+    F1_hat[i] = f1_hat_temp.cdf(y_supp)
+    Q1_hat[i] = f1_hat_temp.ppf(target_quant)
+    
+#%%
+# Expert 2: calibrated probabilistic forecast **only** on the left tail
+p2_hat = np.zeros((nobs, n_locs))
+F2_hat = np.zeros((nobs, n_locs))
+Q2_hat = np.zeros((nobs, len(target_quant)))
+
+for i in range(nobs):
+    # define probabilistic forecast
+    #(X0[i] + alpha_1*X1[i] + alpha_2*X2[i] + alpha_3*X3[i] < -2):
+    #    f2_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i] + alpha_3*X3[i] - 7, scale = 1 + alpha_2**2 + alpha_3**2)
+    #else:
+    #    f2_hat_temp = norm(loc = 10*X0[i], scale = 1 + alpha_2**2 )
+    if X3[i] < threshold + 1:    
+        f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i] - 7, scale = 1 + alpha_2**2 + alpha_3**2)
+    else:
+        f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i], scale = 1 + alpha_2**2 + alpha_3**2)
+        
+    p2_hat[i] = f2_hat_temp.pdf(y_supp)*0.1
+    F2_hat[i] = f2_hat_temp.cdf(y_supp)
+    Q2_hat[i] = f2_hat_temp.ppf(target_quant)
+
+#%%
+# evaluate probabilistic predictions
+
+pinball_1 = 100*pinball(Q1_hat, Y_tail, target_quant).round(4)
+pinball_2 = 100*pinball(Q2_hat, Y_tail, target_quant).round(4)
+
+plt.plot(pinball_1)
+plt.plot(pinball_2)
+plt.show()
+asdf
+#%% Test 2
+nobs = 1000
+alpha_1 = 1
+alpha_2 = 2
+alpha_3 = 1
+
+threshold = -1.2
+
+X0 = np.random.normal(size = 1000).round(1)
+X1 = np.random.normal(size = 1000).round(1)
+X2 = np.random.normal(size = 1000).round(1)
+X3 = np.random.normal(size = 1000).round(1)
+error = np.random.normal(size = 1000).round(1)
+
+P_1 = (alpha_1*X1 + alpha_2*X2).round(1) + (X1>1)*(4)
+P_2 = (alpha_3*X3 - 6).round(1) 
+Y_tail = X0 + P_1 + (P_2)*(X3 < threshold)
+
+y_supp = np.arange(-15, 10, 0.1)
+n_locs = len(y_supp)
+target_quant = np.arange(0.01, 1, 0.01).round(2)
+
+plt.hist(Y_tail, bins = 50)
+plt.show()
+#%%
+# Expert 1: Access to features 1&2
+p1_hat = np.zeros((nobs, n_locs))
+F1_hat = np.zeros((nobs, n_locs))
+Q1_hat = np.zeros((nobs, len(target_quant)))
+
+for i in range(nobs):
+    # define probabilistic forecast
+    f1_hat_temp = norm(loc = X0[i] + alpha_1*X2[i] + alpha_2*X2[i] + 4*(X1[i]>1),
+                       scale = alpha_1 + alpha_2)
+    
+    temp_mu = X0[i] + alpha_1*X1[i]
+    temp_scale = 1 + alpha_2**2 + alpha_3**2
+    
+    p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
+    F1_hat[i] = f1_hat_temp.cdf(y_supp)
+    Q1_hat[i] = f1_hat_temp.ppf(target_quant)
+    
+
+# Expert 2: Access to feature 3/ calibrated probabilistic forecast **only** on the left tail
+p2_hat = np.zeros((nobs, n_locs))
+F2_hat = np.zeros((nobs, n_locs))
+Q2_hat = np.zeros((nobs, len(target_quant)))
+
+for i in range(nobs):
+
+    if X3[i] < threshold:    
+        f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i] - 6, scale = 1)
+    else:
+        f2_hat_temp = norm(loc = X0[i], scale = 3)
+    #f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i] - 7, scale = 1 + alpha_2**2 + alpha_3**2)
+        
+    p2_hat[i] = f2_hat_temp.pdf(y_supp)*0.1
+    F2_hat[i] = f2_hat_temp.cdf(y_supp)
+    Q2_hat[i] = f2_hat_temp.ppf(target_quant)
+
+# evaluate probabilistic predictions
+
+pinball_1 = 100*pinball(Q1_hat, Y_tail, target_quant).round(4)
+pinball_2 = 100*pinball(Q2_hat, Y_tail, target_quant).round(4)
+
+plt.plot(pinball_1)
+plt.plot(pinball_2)
+plt.show()
+
+#%% Test 3
+nobs = 1000
+alpha_1 = 1.1
+alpha_2 = 1.1
+alpha_3 = 3
+
+threshold = -1.5
+
+X0 = np.random.normal(size = 1000).round(1)
+X1 = np.random.normal(size = 1000).round(1)
+X2 = np.random.normal(size = 1000).round(1)
+X3 = np.random.normal(size = 1000).round(1)
+error = np.random.normal(size = 1000).round(1)
+
+P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
+
+Y_tail = X0 + P_1*(((X3) >= threshold)) + (alpha_3*X3)*((X3) < threshold)
+
+y_supp = np.arange(-15, 10, 0.1)
+n_locs = len(y_supp)
+target_quant = np.arange(0.01, 1, 0.01).round(2)
+
+plt.hist(Y_tail, bins = 50)
+plt.show()
+#%%
+# Expert 1: Access to features 1&2
+p1_hat = np.zeros((nobs, n_locs))
+F1_hat = np.zeros((nobs, n_locs))
+Q1_hat = np.zeros((nobs, len(target_quant)))
+
+for i in range(nobs):
+    # define probabilistic forecast
+    f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i],
+                       scale = 0.1)
+        
+    p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
+    F1_hat[i] = f1_hat_temp.cdf(y_supp)
+    Q1_hat[i] = f1_hat_temp.ppf(target_quant)
+    
+
+# Expert 2: Access to feature 3/ calibrated probabilistic forecast **only** on the left tail
+p2_hat = np.zeros((nobs, n_locs))
+F2_hat = np.zeros((nobs, n_locs))
+Q2_hat = np.zeros((nobs, len(target_quant)))
+
+for i in range(nobs):
+
+    if X3[i] < threshold:           
+        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = .1)
+    else:
+        f2_hat_temp = norm(loc = X0[i], scale = 1)
+    #f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i] - 7, scale = 1 + alpha_2**2 + alpha_3**2)
+        
+    p2_hat[i] = f2_hat_temp.pdf(y_supp)*0.1
+    F2_hat[i] = f2_hat_temp.cdf(y_supp)
+    Q2_hat[i] = f2_hat_temp.ppf(target_quant)
+
+# evaluate probabilistic predictions
+
+pinball_1 = 100*pinball(Q1_hat, Y_tail, target_quant).round(4)
+pinball_2 = 100*pinball(Q2_hat, Y_tail, target_quant).round(4)
+
+plt.plot(pinball_1)
+plt.plot(pinball_2)
+plt.show()
+
+
+#%% CRPS learning
+train_p_list = [p1_hat, p2_hat]
+N_experts = 2
+lambda_static_dict = {}
+
+tensor_trainY = torch.FloatTensor(Y_tail)
+#tensor_train_p = torch.FloatTensor(np.column_stack(([p1_hat, p2_hat])))
+tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(2)]
+
+batch_size = 200
+learning_rate = 1e-2
+num_epochs = 1000
+patience = 10
+apply_softmax = True
+
+train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+
+#### CRPS minimization/ with torch layer
+lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
+                                       apply_softmax = True)
+optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
+lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
+                             projection = True)
+
+if apply_softmax:
+    lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
+else:
+    lambda_crps = to_np(lpool_crps_model.weights)
+
+print(lambda_crps)
+#lambda_crps = crps_learning_combination(Y_tail, [p1_hat, p2_hat], support = y_supp, verbose = 1)
+lambda_static_dict['CRPS'] = lambda_crps
+
+#%%
+target_problem = config['problem']
+critical_fractile = 0.1
+risk_aversion = 0.01
+learning_rate = 1e-2
+batch_size = 200
+
+for gamma in [0]:
+    
+    lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
+                                                gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
+                                                apply_softmax = True, regularizer=None)
+    
+    optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
+    
+    lpool_newsv_model.train_model(train_data_loader, [], optimizer, epochs = num_epochs, 
+                                      patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
+    if apply_softmax:
+        lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+    else:
+        lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
+
+#%%
+for m in list(lambda_static_dict.keys()):
+    plt.plot(lambda_static_dict[m], label = m)
+plt.legend()
+plt.show()
+
+#%% Evaluate results
+
+all_models = lambda_static_dict.keys()
+n_test_obs = len(Y_tail)
+Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
+
+testY = Y_tail
+test_p_list = [p1_hat, p2_hat]
+test_Q_list = [Q1_hat, Q2_hat]
+
+# Store pinball loss and Decision cost for task-loss
+temp_QS = pd.DataFrame()
+temp_QS['risk_aversion'] = risk_aversion
+
+temp_Decision_cost = pd.DataFrame()
+temp_Decision_cost['Quantile'] = [critical_fractile]
+temp_Decision_cost['risk_aversion'] = risk_aversion
+
+temp_mean_QS = temp_Decision_cost.copy()
+
+target_quant = np.arange(0.1, 1, 0.1).round(2)
+print('Estimating out-of-sample performance...')
+for j, m in enumerate(all_models):
+    print(m)
+    # Combine PDFs for each observation
+    temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
+
+    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion, 
+                                        crit_quant = critical_fractile)
+       
+    Prescriptions[m] = temp_prescriptions
+        
+    # Estimate task-loss for specific model
+    #%
+    temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY, 
+                                      target_problem, crit_quant = critical_fractile, 
+                                      risk_aversion = risk_aversion)
+    #%
+    
+    # Evaluate QS (approximation of CRPS) for each model
+    # find quantile forecasts
+    temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
+    temp_qs = 100*pinball(temp_q_forecast, testY, target_quant).round(4)
+    print(m)
+
+    temp_QS[m] = [temp_qs]
+    
+    temp_CDF = temp_pdf.cumsum(1)
+    H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY.reshape(-1,1)
+    
+    CRPS = 100*np.square(temp_CDF - H_i).mean()            
+    temp_mean_QS[m] = CRPS
+
+#    if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
+#        plt.plot(temp_qs, label = m)
+#plt.legend()
+#plt.ylabel('Pinball loss')
+#plt.xticks(np.arange(len(target_quant)), target_quant)
+#plt.xlabel('Quantile')
+#plt.show()
+#%%
+print('Decision Cost')
+print(temp_Decision_cost[all_models].mean().round(4))
+
+print('CRPS')
+print(temp_mean_QS[all_models].mean().round(4))
+
+
+#%%
 
 f_mid = norm(loc = X0 + alpha_1*X1, scale = 1 + alpha_2**2 + alpha_3**2)
 
@@ -498,73 +818,15 @@ f2 = norm(loc = alpha_2, scale = 1 + alpha_1**2 + alpha_3**2)
 f3 = norm(loc = alpha_3, scale = 1 + alpha_1**2 + alpha_2**2)
 #%%
 
-plt.plot(x, f1.pdf(x), 'k-', lw=2, label='frozen pdf')
 
-#%%
-aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
-#%% Data pre-processing
-zone_target = config['target_zone']
-aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
-target_problem = config['problem']
-risk_aversion = config['risk_aversion']
-
-filename_prefix = f'Z{zone_target[0]}_{target_problem}_'
-        
-del aggr_df['ZONEID']
-
-aggr_df['Hour'] = aggr_df.index.hour
-aggr_df['Month'] = aggr_df.index.month
-
-weather_dict = {'VAR78':'tclw', 'VAR79': 'tciw', 'VAR134':'SP', 'VAR157':'rh', 
-                'VAR164':'tcc', 'VAR165':'10u', 'VAR166':'10v', 'VAR167':'2T', 
-                'VAR169':'SSRD', 'VAR175':'STRD', 'VAR178':'TSR', 'VAR228':'TP'}
-
-aggr_df = aggr_df.rename(columns = weather_dict)
-
-#aggr_df['diurnal_2'] = np.cos(2*np.pi*(aggr_df.index.hour+1)/24)
-#aggr_df['diurnal_3'] = np.sin(4*np.pi*(aggr_df.index.hour+1)/24)
-#aggr_df['diurnal_4'] = np.cos(4*np.pi*(aggr_df.index.hour+1)/24)
-aggr_df['diurnal'] = np.maximum(np.sin(2*np.pi*(aggr_df.index.hour+3)/24), np.zeros(len(aggr_df)))
-aggr_df['month_cos'] = np.cos(2*np.pi*(aggr_df.index.month+1)/12)
-#%%
-for col in ['SSRD', 'STRD', 'TSR', 'TP']:
-    if col != 'TP':
-        aggr_df[col] = aggr_df[col].diff()/3600
-        aggr_df[col][aggr_df[col]<0] = np.nan
-    else:
-        aggr_df[col] = aggr_df[col].diff()
-        aggr_df[col][aggr_df[col]<0] = np.nan
-        
-aggr_df = aggr_df.interpolate()
-aggr_df = aggr_df.dropna()
-
-
-#target_scaler = MinMaxScaler()
-#pred_scaler = MinMaxScaler()
-
-#%%
-
-aggr_df['Hour'] = aggr_df.index.hour
-aggr_df['Month'] = aggr_df.index.month
-
-# remove hours with zero production (timestamp is UTC/ plants are in Australia)
-bool_ind = aggr_df.groupby('Hour').mean()['POWER'] == 0
-zero_hour = bool_ind.index.values[bool_ind.values]
-aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
-
-#%%
-
-#!!!! Add randomization based on the iteration counter here
-train_forecast_model = False
-generate_forecasts = True
 critical_fractile = config['crit_quant'][0]
+target_problem = config['problem']
 
 if target_problem == 'newsvendor':
     config['risk_aversion'] = [0]
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
-                                                   config['risk_aversion'])]
+    tuple_list = [tup for tup in itertools.product(config['crit_quant'],config['risk_aversion'])]
 elif (target_problem == 'reg_trad') or (target_problem == 'pwl'):
-    tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'], config['crit_quant'])]
+    tuple_list = [tup for tup in itertools.product(config['risk_aversion'], config['crit_quant'])]
 
 #%%
 # Set up some problem parameters
