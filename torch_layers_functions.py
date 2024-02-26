@@ -617,7 +617,10 @@ class LinearPoolNewsvendorLayer(nn.Module):
                         self.weights.copy_(torch.FloatTensor(lambda_proj.value))
                 
                 running_loss += loss.item()
-            
+                
+            if epoch%5 == 0:
+                print(torch.nn.functional.softmax(self.weights))
+                
             average_train_loss = running_loss / len(train_loader)
                                         
             if validation == True:

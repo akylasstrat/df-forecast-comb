@@ -512,7 +512,15 @@ pinball_2 = 100*pinball(Q2_hat, Y_tail, target_quant).round(4)
 plt.plot(pinball_1)
 plt.plot(pinball_2)
 plt.show()
-asdf
+
+#%%
+for i in range(10):
+    plt.plot(Y_tail[i], 0, 'o')
+    plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
+    plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
+    plt.legend()
+    plt.show()
+
 #%% Test 2
 nobs = 1000
 alpha_1 = 1
@@ -582,13 +590,19 @@ plt.plot(pinball_1)
 plt.plot(pinball_2)
 plt.show()
 
+for i in range(10):
+    plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
+    plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
+    plt.plot(Y_tail[i], 0, 'o')
+    plt.legend()
+    plt.show()
 #%% Test 3
 nobs = 1000
 alpha_1 = 1.1
 alpha_2 = 1.1
-alpha_3 = 3
+alpha_3 = 4
 
-threshold = -1.5
+threshold = -1.25
 
 X0 = np.random.normal(size = 1000).round(1)
 X1 = np.random.normal(size = 1000).round(1)
@@ -598,9 +612,9 @@ error = np.random.normal(size = 1000).round(1)
 
 P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
 
-Y_tail = X0 + P_1*(((X3) >= threshold)) + (alpha_3*X3)*((X3) < threshold)
+Y_tail = X0 + P_1 + (alpha_3*X3)*((X3) < threshold)
 
-y_supp = np.arange(-15, 10, 0.1)
+y_supp = np.arange(-15, 7, 0.1)
 n_locs = len(y_supp)
 target_quant = np.arange(0.01, 1, 0.01).round(2)
 
@@ -615,7 +629,7 @@ Q1_hat = np.zeros((nobs, len(target_quant)))
 for i in range(nobs):
     # define probabilistic forecast
     f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i],
-                       scale = 0.1)
+                       scale = .25)
         
     p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
     F1_hat[i] = f1_hat_temp.cdf(y_supp)
@@ -630,7 +644,7 @@ Q2_hat = np.zeros((nobs, len(target_quant)))
 for i in range(nobs):
 
     if X3[i] < threshold:           
-        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = .1)
+        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = .5)
     else:
         f2_hat_temp = norm(loc = X0[i], scale = 1)
     #f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i] - 7, scale = 1 + alpha_2**2 + alpha_3**2)
@@ -647,7 +661,13 @@ pinball_2 = 100*pinball(Q2_hat, Y_tail, target_quant).round(4)
 plt.plot(pinball_1)
 plt.plot(pinball_2)
 plt.show()
-
+#%%
+for i in range(20):
+    plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
+    plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
+    plt.plot(Y_tail[i], 0, 'o')
+    plt.legend()
+    plt.show()
 
 #%% CRPS learning
 train_p_list = [p1_hat, p2_hat]
@@ -658,7 +678,7 @@ tensor_trainY = torch.FloatTensor(Y_tail)
 #tensor_train_p = torch.FloatTensor(np.column_stack(([p1_hat, p2_hat])))
 tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(2)]
 
-batch_size = 200
+batch_size = 100
 learning_rate = 1e-2
 num_epochs = 1000
 patience = 10
@@ -770,7 +790,7 @@ for j, m in enumerate(all_models):
 #plt.xticks(np.arange(len(target_quant)), target_quant)
 #plt.xlabel('Quantile')
 #plt.show()
-#%%
+
 print('Decision Cost')
 print(temp_Decision_cost[all_models].mean().round(4))
 
