@@ -592,7 +592,8 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 sql2_loss = torch.square(error_hat).sum()
                 
                 if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1)
+                                    + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
                     
                     # Total regret (scale CRPS for better trade-off control)
                     loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
@@ -618,7 +619,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
                 running_loss += loss.item()
                 
-            if epoch%5 == 0:
+            if epoch%1 == 0:
                 print(torch.nn.functional.softmax(self.weights))
                 
             average_train_loss = running_loss / len(train_loader)

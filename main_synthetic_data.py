@@ -141,9 +141,10 @@ def task_loss(pred, actual, problem, **kwargs):
     
     if problem == 'mse':
         return np.square(actual_copy-pred_copy).mean()
-    elif problem == 'newsvendor':
 
+    elif problem == 'newsvendor':
         return np.maximum(kwargs['crit_quant']*(actual_copy - pred_copy), (kwargs['crit_quant']-1)*(actual_copy - pred_copy)).mean()
+
     elif problem == 'cvar':
         pinball_loss = np.maximum(kwargs['crit_quant']*(actual_copy - pred_copy), (kwargs['crit_quant']-1)*(actual_copy - pred_copy))    
         #profit = 2e3*(27*actual_copy - pinball_loss)
@@ -602,7 +603,7 @@ alpha_1 = 1.1
 alpha_2 = 1.1
 alpha_3 = 4
 
-threshold = -1.25
+threshold = -1.3
 
 X0 = np.random.normal(size = 1000).round(1)
 X1 = np.random.normal(size = 1000).round(1)
@@ -658,8 +659,8 @@ for i in range(nobs):
 pinball_1 = 100*pinball(Q1_hat, Y_tail, target_quant).round(4)
 pinball_2 = 100*pinball(Q2_hat, Y_tail, target_quant).round(4)
 
-plt.plot(pinball_1)
-plt.plot(pinball_2)
+plt.plot(pinball_1, label = 'Expert 1')
+plt.plot(pinball_2, label = 'Expert 2')
 plt.show()
 #%%
 for i in range(20):
@@ -705,7 +706,7 @@ lambda_static_dict['CRPS'] = lambda_crps
 
 target_problem = config['problem']
 critical_fractile = 0.1
-risk_aversion = 0.01
+risk_aversion = 0.1
 learning_rate = 1e-2
 batch_size = 200
 
