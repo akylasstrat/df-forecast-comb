@@ -599,8 +599,8 @@ for i in range(10):
     plt.show()
 #%% Test 3
 nobs = 1000
-alpha_1 = 1.1
-alpha_2 = 1.1
+alpha_1 = 1.2
+alpha_2 = 1.2
 alpha_3 = 4
 
 threshold = -1.3
