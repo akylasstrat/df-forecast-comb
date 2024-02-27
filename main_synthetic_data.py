@@ -621,7 +621,7 @@ target_quant = np.arange(0.01, 1, 0.01).round(2)
 
 plt.hist(Y_tail, bins = 50)
 plt.show()
-#%%
+
 # Expert 1: Access to features 1&2
 p1_hat = np.zeros((nobs, n_locs))
 F1_hat = np.zeros((nobs, n_locs))
@@ -630,7 +630,7 @@ Q1_hat = np.zeros((nobs, len(target_quant)))
 for i in range(nobs):
     # define probabilistic forecast
     f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i],
-                       scale = .25)
+                       scale = .5)
         
     p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
     F1_hat[i] = f1_hat_temp.cdf(y_supp)
@@ -645,7 +645,7 @@ Q2_hat = np.zeros((nobs, len(target_quant)))
 for i in range(nobs):
 
     if X3[i] < threshold:           
-        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = .5)
+        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = .25)
     else:
         f2_hat_temp = norm(loc = X0[i], scale = 1)
     #f2_hat_temp = norm(loc = X0[i] + alpha_3*X3[i] - 7, scale = 1 + alpha_2**2 + alpha_3**2)
