@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Decision-Focused Forecast Combination/ main script/ second experimental setup: different probabilistic forecasting models for the same location/ solar plants example
+Grid scheduling example
 
-@author: a.stratigakos
+@author: astratig
 """
 
 import pandas as pd
@@ -18,27 +18,14 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.model_selection import GridSearchCV
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.tree import DecisionTreeRegressor
+from matpowercaseframes import CaseFrames
 
 
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 
-#from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from gurobi_ml import add_predictor_constr
-#from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
-#from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import MinMaxScaler
-
-#from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
-#project_dir=Path(cd).parent.__str__()   #project_directory
-
-#from EnsemblePrescriptiveTree import *
-#from EnsemblePrescriptiveTree_OOB import *
-#from optimization_functions import *
-
-#from LinearDecisionTree import *
-#from sklearn.neural_network import MLPRegressor
-#from sklearn.tree import DecisionTreeRegressor
 
 from utility_functions import *
 from optimal_transport_functions import *
@@ -54,71 +41,6 @@ plt.rcParams['font.size'] = 7
 plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
-
-def averaging_decisions(target_y, train_z_opt, problem, 
-                        crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0, 
-                        **kwargs):            
-    ''' (Salva's benchmark) Solve the stochastic problem in-sample for each observations and each expert, combine the decisions'''
-
-    n_obs = train_z_opt.shape[0]
-    n_models = train_z_opt.shape[1]
-    risk_aversion = kwargs['risk_aversion']
-
-    ### Find optimal decisions under perfect foresight information
-    
-    print('Solve in-sample stchastic problems...')
-    
-    #z_opt = np.zeros((n_obs, n_models))
-    insample_cost = np.zeros(n_models)
-    insample_inverse_cost = np.zeros(n_models)
-    
-    for j in range(n_models):
-        '''
-        if problem == 'newsvendor':
-            for i in range(n_obs):
-                # Solve stochastic problem, find decision
-                z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
-            # Estimate decision cost (regret)
-        elif problem == 'reg_trad':
-            temp_z_opt = solve_opt_prob(support, prob_vectors[j], problem, risk_aversion = risk_aversion, 
-                                        crit_quant = crit_fract)
-            z_opt[:,j] = temp_z_opt
-        '''
-        
-    #### set optimization problem    
-    m = gp.Model()
-    if verbose == 0: 
-        m.setParam('OutputFlag', 0)
-    # Decision variables
-    lambdas = m.addMVar(n_models, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    z_comb = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-    lambdas.Start = (1/n_models)*np.ones(n_models)
-    
-    error = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    pinball_loss_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-    m.addConstr( lambdas.sum() == 1)
-    
-    m.addConstr( z_comb == sum([train_z_opt[:,j]*lambdas[j] for j in range(n_models)]) )
-    
-    # Task-loss function
-    m.addConstr( error == target_y - z_comb)
-    
-    if (problem == 'reg_trad') or (problem == 'newsvendor'):
-        m.addConstr( pinball_loss_i >= crit_fract*error)
-        m.addConstr( pinball_loss_i >= (crit_fract-1)*error)    
-        m.setObjective( (1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error) , gp.GRB.MINIMIZE)
-    elif problem == 'pwl':
-        m.addConstr( pinball_loss_i >= crit_fract*error)
-        m.addConstr( pinball_loss_i >= (-0.5)*error)
-        m.addConstr( pinball_loss_i >= (crit_fract - 1)*(error + 0.1))
-    
-        m.setObjective( pinball_loss_i.sum() + risk_aversion*(error@error), gp.GRB.MINIMIZE)
-        
-    m.optimize()
-    
-    return lambdas.X
 
 def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.01, .01).round(2), verbose = 0):
 
@@ -410,7 +332,7 @@ def tree_params():
 #    dataset = torch.utils.data.TensorDataset(X,Y)
 #    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
-def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
+def insample_weight_tuning(grid, target_y, train_z_opt, 
                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
         set weights based on inverse cost (or could use softmax activation)
@@ -422,37 +344,17 @@ def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor',
         - Output:
             lambdas_inv: weights based on inverse in-sample performance'''
     
-    n_obs = train_z_opt
-    n_models = train_z_opt.shape[1]
-    
+    n_experts = len(train_z_opt)    
     risk_aversion = kwargs['risk_aversion']
-    crit_quant = kwargs['crit_quant']
     ### Find optimal decisions under perfect foresight information
     
-    print('Solve in-sample stochastic problems...')
-    
+    print('Estimate in-sample task loss...')
     #z_opt = np.zeros((n_obs, n_models))
-    insample_cost = np.zeros((n_models))
-    insample_inverse_cost = np.zeros((n_models))
+    insample_cost = np.zeros((n_experts))
+    insample_inverse_cost = np.zeros((n_experts))
 
-    for j in range(n_models):
-        '''
-        if problem == 'newsvendor':
-            for i in range(n_obs):
-                # Solve stochastic problem, find decision
-                z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
-            # Estimate decision cost (regret)
-        elif problem == 'reg_trad':
-            
-            temp_w_mat = np.array(prob_vectors[j])
-
-            temp_z_opt = solve_opt_prob(support, temp_w_mat, problem, risk_aversion = risk_aversion, 
-                                        crit_quant = crit_quant)
-            z_opt[:,j] = temp_z_opt
-        '''
-        #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
-        insample_cost[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
-                                     crit_quant = crit_quant)
+    for j in range(n_experts):        
+        insample_cost[j] = scheduling_task_loss(grid, train_z_opt[j], target_y.reshape(-1))
         insample_inverse_cost[j] = 1/insample_cost[j]
 
     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
@@ -460,49 +362,70 @@ def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor',
 
     return lambdas_inv, lambdas_softmax
                 
-def task_loss(pred, actual, problem, **kwargs):
-    'Estimates task loss for different problems'
+def scheduling_task_loss(grid, da_prescriptions, actual):
+    'Estimates aggregated DA+RT cost'
 
-    pred_copy = pred.copy().reshape(-1)
+    prescr_copy = da_prescriptions.copy()
     actual_copy = actual.copy().reshape(-1)
+    n_samples = len(prescr_copy)
+    Task_loss = []
     
+    # Solve the RT scheduling problem    
+    rt_sched = gp.Model()
+    rt_sched.setParam('OutputFlag', 0)
+
+    # DA Variables
+    p_DA = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'p_G')
     
-    if problem == 'mse':
-        return np.square(actual_copy-pred_copy).mean()
-    elif problem == 'newsvendor':
+    # cost variables
+    da_cost = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    rt_cost = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb =  -gp.GRB.INFINITY)
 
-        return np.maximum(kwargs['crit_quant']*(actual_copy - pred_copy), (kwargs['crit_quant']-1)*(actual_copy - pred_copy)).mean()
-    elif problem == 'cvar':
-        pinball_loss = np.maximum(kwargs['crit_quant']*(actual_copy - pred_copy), (kwargs['crit_quant']-1)*(actual_copy - pred_copy))    
-        #profit = 2e3*(27*actual_copy - pinball_loss)
-        cvar_mask = pinball_loss >= np.quantile(pinball_loss, 1-kwargs['epsilon'])
+    # RT Variables
+    w_rt = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    r_up = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    r_down = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0)
 
-        task_loss = ((1-kwargs['risk_aversion'])*pinball_loss.mean() + kwargs['risk_aversion']*pinball_loss[cvar_mask].mean()) 
+    G_shed = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    L_shed = rt_sched.addMVar((grid['n_loads']), vtype = gp.GRB.CONTINUOUS, lb = 0)
+
+    # Add generator constraints, DA & RT
+    rt_sched.addConstr( p_DA + r_up <= grid['Pmax'].reshape(-1))    
+    rt_sched.addConstr( r_down <= p_DA)    
+
+    rt_sched.addConstr( r_up <= grid['R_u_max'].reshape(-1))
+    rt_sched.addConstr( r_down <= grid['R_d_max'].reshape(-1))
+
+    rt_sched.addConstr( G_shed <= grid['Pmax'].reshape(-1))
+    rt_sched.addConstr( L_shed <= grid['Pd'].reshape(-1))
         
-        return task_loss
+    # RT balancing constraint    
+    rt_sched.addConstr( p_DA.sum() + r_up.sum() - r_down.sum() - G_shed.sum() + grid['w_capacity']*w_rt.sum() + L_shed.sum() == grid['Pd'].sum())
     
-    elif problem == 'pwl':
+    # Expected decision cost for DA + RT scheduling
+    rt_sched.addConstr( da_cost == grid['Cost']@p_DA)
+    rt_sched.addConstr( rt_cost == (grid['C_up'])@r_up + (-grid['C_down'])@r_down + grid['VOLL']*L_shed.sum() + grid['VOLL']*G_shed.sum())
 
-        deviation = actual_copy - pred_copy
-        square_loss = np.square(deviation)          
+    rt_sched.setObjective(da_cost + rt_cost)
+    
+    for i in range(n_samples):
 
-        p1 = kwargs['crit_quant']*deviation
-        p2 = -0.5*deviation        
-        p3 = (kwargs['crit_quant']-1)*(deviation + 0.1)        
-        pwl_loss = np.maximum.reduce([p1, p2, p3])        
-        return pwl_loss.mean() + kwargs['risk_aversion']*square_loss.mean()
-
-
-    elif problem == 'reg_trad':
-
-        deviation = actual_copy - pred_copy
-        pinball_loss = np.maximum(kwargs['crit_quant']*deviation, (kwargs['crit_quant']-1)*deviation)  
-        square_loss = np.square(deviation)          
+        # Solve DA market with predictions, save results
+        c1 = rt_sched.addConstr(p_DA == prescr_copy[i])
+        c2 = rt_sched.addConstr(w_rt == actual_copy[i])
         
-        return (1- kwargs['risk_aversion'])*pinball_loss.mean() + kwargs['risk_aversion']*square_loss.mean()
+        rt_sched.optimize()
         
-def solve_opt_prob(scenarios, weights, problem, **kwargs):
-    ''' Solves stochastic optimization problem
+        for c in [c1,c2]: rt_sched.remove(c)
+        
+        Task_loss.append(rt_sched.ObjVal)
+        
+    Task_loss = np.array(Task_loss)
+    
+    return Task_loss.mean()
+
+def solve_stoch_sched(grid, scenarios, weights, **kwargs):
+    ''' Solves stochastic scheduling problem
         -Args
             scenarios: sampled scenarios (e.g., locations of PDF)
             weights: weight of each sceanrio (e.g., probability of each PDF location)
@@ -513,216 +436,194 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
     
     risk_aversion = kwargs['risk_aversion']
 
-    #e = kwargs['epsilon']
-    crit_quant = kwargs['crit_quant']
-
     if scenarios.ndim>1:
         target_scen = scenarios.copy().reshape(-1)
     else:
         target_scen = scenarios.copy()
         
     n_scen = len(target_scen)
+
+
+    stoch_market = gp.Model()
+    stoch_market.setParam('OutputFlag', 0)
+
+    # DA Variables
+    p_DA = stoch_market.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'p_G')
+    slack_DA = stoch_market.addMVar((grid['n_loads']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'slack')
+    exp_w = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    # cost variables
+    da_cost = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    rt_cost = stoch_market.addMVar((n_scen), vtype = gp.GRB.CONTINUOUS, lb =  -gp.GRB.INFINITY)
+    t_aux = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb =  -gp.GRB.INFINITY)
+
+    # RT Variables
+    w_rt = stoch_market.addMVar((1, n_scen), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    r_up = stoch_market.addMVar((grid['n_unit'], n_scen), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    r_down = stoch_market.addMVar((grid['n_unit'], n_scen), vtype = gp.GRB.CONTINUOUS, lb = 0)
+
+    G_shed = stoch_market.addMVar((grid['n_unit'], n_scen), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    L_shed = stoch_market.addMVar((grid['n_loads'], n_scen), vtype = gp.GRB.CONTINUOUS, lb = 0)
+
+    # Add generator constraints, DA & RT
+    stoch_market.addConstrs( p_DA + r_up[:,s] <= grid['Pmax'].reshape(-1) for s in range(n_scen))
+    stoch_market.addConstrs( r_down[:,s] <= p_DA for s in range(n_scen))
     
-    if problem == 'cvar':
-        # CVaR tail probability
-        
-        m = gp.Model()
-        m.setParam('OutputFlag', 0)
-        ################################################
-        #CVaR: auxiliary parameters
-        # Multi-temporal: Minimize average Daily costs
-        ### Variables
-        offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-        deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-        loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0)
-        profit = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    stoch_market.addConstr( r_up <= np.tile(grid['R_u_max'].reshape(-1,1), n_scen))
+    stoch_market.addConstr( r_down <= np.tile(grid['R_d_max'].reshape(-1,1), n_scen))
 
-        ### CVaR variables (follows Georghiou, Kuhn, et al.)
-        beta = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name='VaR')
-        zeta = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0)  # Aux
-        cvar = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-         
-        m.addConstr( deviation == target_scen - offer)
+    stoch_market.addConstr( G_shed <= np.tile(grid['Pmax'].reshape(-1,1), n_scen))
+    stoch_market.addConstr( L_shed <= np.tile(grid['Pd'].reshape(-1,1), n_scen))
         
-        m.addConstr( loss >= (crit_quant)*deviation)
-        m.addConstr( loss >= (crit_quant-1)*deviation)
+    # DA balancing constraint
+    #stoch_market.addConstr( p_DA.sum() + exp_w.sum() + slack_DA.sum() == grid['Pd'].sum())
 
-        m.addConstr( profit == (target_scen*27 - loss) )            
-        m.addConstr( zeta >= beta - profit)
-
-        #m.addConstr( zeta >=  -beta + loss )
-        #m.addConstr( cvar == beta + (1/e)*(zeta@weights))
-        m.addConstr( cvar == beta - (1/(1-e))*(zeta@weights) )            
-        m.setObjective( (1-risk_aversion)*(profit@weights) + risk_aversion*(cvar), gp.GRB.MAXIMIZE )
-        
-        #m.setObjective( 0, gp.GRB.MINIMIZE)
-        
-        m.optimize()
-        return offer.X[0]
+    # RT balancing constraint
+    #stoch_market.addConstrs( p_DA.sum() + exp_w.sum() + slack_DA.sum() == grid['Pd'].sum() for s in range(n_scen))
     
-    elif problem == 'reg_trad':
-        # regularized newsvendor problem
-        if weights.ndim == 1:
-            # solve for a single problem instance
-            m = gp.Model()
-            
-            m.setParam('OutputFlag', 0)
+    stoch_market.addConstrs( p_DA.sum() + r_up[:,s].sum() - r_down[:,s].sum()
+                            -G_shed[:,s].sum() + grid['w_capacity']*w_rt[:,s].sum() + L_shed[:,s].sum() == grid['Pd'].sum() for s in range(n_scen))
 
-            # target variable
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-
-            m.addConstr(deviation == (target_scen - offer) )
-            
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation) )
-            
-            m.setObjective( (1-risk_aversion)*(weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
-            m.optimize()
-                
-            return offer.X
         
-        else:
-            # solve for multiple test observations/ declares gurobi model once for speed up
-            n_test_obs = len(weights)
-            Prescriptions = np.zeros((n_test_obs))
-            m = gp.Model()            
-            m.setParam('OutputFlag', 0)
 
-            # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            
-            # constraints
-            m.addConstr(deviation == (target_scen - offer) )
-            m.addConstr(loss >= crit_quant*deviation )
-            m.addConstr(loss >= (crit_quant-1)*deviation )
-            m.setObjective( t, gp.GRB.MINIMIZE)
-            
-            for row in range(len(weights)):
-                c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) 
-                               + 2*risk_aversion*(deviation@(deviation*weights[row])))
+    # Expected decision cost for DA + RT scheduling
+    stoch_market.addConstr( da_cost == grid['Cost']@p_DA + grid['VOLL']*slack_DA.sum())
+    stoch_market.addConstrs( rt_cost[s] == (grid['C_up'])@r_up[:,s] + (-grid['C_down'])@r_down[:,s] + grid['VOLL']*L_shed[:,s].sum() + grid['VOLL']*G_shed[:,s].sum()
+                            for s in range(n_scen))
 
-                m.optimize()
-                
-                m.remove(c1)
-                
-                Prescriptions[row] = offer.X[0]
-                
-            return Prescriptions
     
-    elif (problem == 'reg_trad') or (problem == 'newsvendor'):
-        # regularized newsvendor problem
-        if weights.ndim == 1:
-            # solve for a single problem instance
-            m = gp.Model()
-            
-            m.setParam('OutputFlag', 0)
 
-            # target variable
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
+    # solve for multiple test observations/ declares gurobi model once for speed up
+    n_test_obs = len(weights)
+    DA_prescriptions = np.zeros((n_test_obs, grid['n_unit']))
 
-            m.addConstr(deviation == (target_scen - offer) )
-            
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation) )
-            
-            m.setObjective( (1-risk_aversion)*(weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
-            m.optimize()
-                
-            return offer.X
+    stoch_market.addConstr( w_rt == target_scen)
+
+    stoch_market.setObjective( da_cost + t_aux)
+
+    
+    for row in range(len(weights)):
+        if row%1000 == 0: print(row)
+        # expected renewable production
+        c1 = stoch_market.addConstr( exp_w == target_scen@weights[row])
+        c2 = stoch_market.addConstr( t_aux >= rt_cost@weights[row])
+    
+        stoch_market.optimize()
         
-        else:
-            # solve for multiple test observations/ declares gurobi model once for speed up
-            n_test_obs = len(weights)
-            Prescriptions = np.zeros((n_test_obs))
-            m = gp.Model()            
-            m.setParam('OutputFlag', 0)
-
-            # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            
-            # constraints
-            m.addConstr(deviation == (target_scen - offer) )
-            m.addConstr(loss >= crit_quant*deviation )
-            m.addConstr(loss >= (crit_quant-1)*deviation )
-            m.setObjective( t, gp.GRB.MINIMIZE)
-            
-            for row in range(len(weights)):
-                c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) 
-                               + 2*risk_aversion*(deviation@(deviation*weights[row])))
-
-                m.optimize()
-                
-                m.remove(c1)
-                
-                Prescriptions[row] = offer.X[0]
-                
-            return Prescriptions
-    elif problem == 'pwl':
-        # regularized newsvendor problem
-        if weights.ndim == 1:
-            # solve for a single problem instance
-            m = gp.Model()
-            
-            m.setParam('OutputFlag', 0)
-
-            # target variable
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-
-            m.addConstr(deviation == (target_scen - offer) )
-            
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= -0.5*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation + 0.1) )
-            
-            m.setObjective( (weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
-            m.optimize()
-                
-            return offer.X
+        for constr in [c1,c2]: stoch_market.remove(constr)        
+        stoch_market.remove(c1)
         
-        else:
-            # solve for multiple test observations/ declares gurobi model once for speed up
-            n_test_obs = len(weights)
-            Prescriptions = np.zeros((n_test_obs))
-            m = gp.Model()            
-            m.setParam('OutputFlag', 0)
-
-            # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            
-            # constraints
-            m.addConstr(deviation == (target_scen - offer) )
-
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= -0.5*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation + 0.1) )
-            m.setObjective( t, gp.GRB.MINIMIZE)
-            
-            for row in range(len(weights)):
-                c1 = m.addConstr(t >= (weights[row]@loss) + risk_aversion*(deviation@(deviation*weights[row])))
-
-                m.optimize()                
-                m.remove(c1)                
-                Prescriptions[row] = offer.X[0]        
-            return Prescriptions
+        DA_prescriptions[row] = p_DA.X
         
-    elif problem =='mse':
-        return (target_scen@weights)
- 
+    return DA_prescriptions
+    
+def grid_dict(path, save = False):
+    ''' reads .m file with matpowercaseframes, returns dictionary with problem matrices'''
+
+    matgrid = CaseFrames(path)
+    # set cardinalities
+    gen_mask = matgrid.gen.PMAX > 0
+        
+    num_nodes = len(matgrid.bus)
+    num_lines = len(matgrid.branch)
+    
+    num_gen = len(matgrid.gen[gen_mask]) 
+    num_load = len(matgrid.bus)  # assume demand at each node
+
+    # Construct incidence matrix
+    A = np.zeros((num_lines, num_nodes))
+    
+    for l in range(num_lines):
+        temp_line = matgrid.branch.iloc[l]
+        #A[l, temp_line['F_BUS'].astype(int)-1] = 1
+        #A[l, temp_line['T_BUS'].astype(int)-1] = -1
+        A[l, np.where(matgrid.bus.BUS_I == temp_line['F_BUS'])[0]] = 1
+        A[l, np.where(matgrid.bus.BUS_I == temp_line['T_BUS'])[0]] = -1
+        
+    # Construct diagonal reactance matrix
+    react = 1/matgrid.branch['BR_X'].values
+    b_diag = np.diag(react)
+    
+    # Bus susceptance matrix
+    B_susc = A.T@b_diag@A
+    
+    B_line = b_diag@A
+    B_inv = np.zeros(B_susc.shape)
+    B_inv[1:,1:] = np.linalg.inv(B_susc[1:,1:])
+    PTDF = B_line@B_inv
+    
+    node_G = np.zeros((num_nodes, num_gen))
+    #print(matgrid.gen)
+    for i in range(len(matgrid.gen[gen_mask])):
+        node_G[np.where(matgrid.bus.BUS_I == matgrid.gen[gen_mask].GEN_BUS.iloc[i])[0], i] = 1
+        
+    node_L = np.diag(np.ones(num_nodes))
+    
+    node_demand = matgrid.bus.PD.values
+    Line_cap = matgrid.branch.RATE_A.values
+    
+    grid = {}
+    grid['Pd'] = matgrid.bus['PD'].values
+    grid['Pmax'] = matgrid.gen['PMAX'].values[gen_mask]
+    grid['Pmin'] = matgrid.gen['PMIN'].values[gen_mask]
+    grid['Cost'] = matgrid.gencost['COST_1'].values[gen_mask]
+    
+    grid['Line_Capacity'] = Line_cap
+    grid['node_G'] = node_G
+    grid['node_L'] = node_L
+    grid['B_susc'] = B_susc
+    grid['A'] = A
+    grid['b_diag'] = b_diag
+    grid['B_line'] = B_line
+    grid['PTDF'] = PTDF
+    
+    # Cardinality of sets
+    grid['n_nodes'] = num_nodes
+    grid['n_lines'] = num_lines
+    grid['n_unit'] = num_gen
+    grid['n_loads'] = num_load
+    
+    #Other parameters set by user
+    grid['VOLL'] = 500   #Value of Lost Load
+    grid['VOWS'] = 35   #Value of wind spillage
+    grid['gshed'] = 200   #Value of wind spillage
+    
+    grid['B_line'] = grid['b_diag']@grid['A']
+    B_inv = np.zeros(grid['B_susc'].shape)
+    B_inv[1:,1:] = np.linalg.inv(grid['B_susc'][1:,1:])
+    grid['PTDF'] = grid['B_line']@B_inv
+    
+    #if save:  
+    #    pickle.dump(grid, open(cd+'\\data\\'+network.split('.')[0]+'.sav', 'wb'))
+    return grid
+
+def load_grid_data(case_name):
+    case_name_prefix = case_name.split('.')[0]    
+    #matgrid = CaseFrames(pglib_path + case)
+    grid = grid_dict(pglib_path + case_name)
+    
+    print(case_name_prefix)
+
+    grid['C_up'] = 1.8*grid['Cost']
+    grid['C_down'] = 0.9*grid['Cost']
+    grid['w_capacity'] = w_cap_dict[case_name]
+    grid['w_bus'] = w_bus_dict[case_name]
+    
+    # wind incidence matrix
+    grid['node_Wind'] = np.zeros((grid['n_nodes'], 1))
+    grid['node_Wind'][grid['w_bus']] = 1
+    
+    
+    R_u_max = np.ones(grid['n_unit'])
+    R_u_max[grid['Cost'] < 10] = (grid['Pmax'][grid['Cost'] < 10]/5).round(2)
+    R_u_max[ (grid['Cost'] >= 10)*(grid['Cost'] < 20) ] = ( grid['Pmax'][(grid['Cost'] >= 10)*(grid['Cost'] < 20)] /2 ).round(2)
+    R_u_max[ grid['Cost'] >= 20 ] = grid['Pmax'][grid['Cost'] >= 20]
+    
+    R_d_max = R_u_max
+    grid['VOLL'] = 200
+    grid['R_u_max'] = R_u_max
+    grid['R_d_max'] = R_d_max
+    return grid
+
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
@@ -746,7 +647,7 @@ def params():
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'pwl' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2]
     
@@ -754,27 +655,39 @@ def params():
     params['crit_quant'] = np.arange(0.1, 0.4, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
-    params['train_static'] = False
-    params['train_adaptive'] = True
+    params['train_static'] = True
+    params['train_adaptive'] = False
     
-    # approaches to map data to decisions
-    # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
-    # DT: decision tree, NN: neural network (both results in MIPs)
-    params['decision_rules'] = ['LR', 'JMBench', 'SalvaBench'] 
-
     return params
 
 #%%
-    
 config = params()
 hyperparam = tree_params()
 nn_hparam = nn_params()
 
-results_path = f'{cd}\\results\\solar_different_prob_models'
+results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
+
+# load grid data
+Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
+         'pglib_opf_case24_ieee_rts.m', 'pglib_opf_case39_epri.m', 'pglib_opf_case73_ieee_rts.m']
+
+w_bus = [13, 37, 36, 14, 5, 40]
+w_bus_dict = {}
+
+w_cap = [100, 600, 500, 1000, 1500, 1000]
+w_cap_dict = {}
+
+for i, case in enumerate(Cases):
+    w_bus_dict[case] = w_bus[i]
+    w_cap_dict[case] = w_cap[i]
+
+grid = load_grid_data(Cases[0])
+
 #%% Data pre-processing
 zone_target = config['target_zone']
 aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
@@ -794,12 +707,10 @@ weather_dict = {'VAR78':'tclw', 'VAR79': 'tciw', 'VAR134':'SP', 'VAR157':'rh',
 
 aggr_df = aggr_df.rename(columns = weather_dict)
 
-#aggr_df['diurnal_2'] = np.cos(2*np.pi*(aggr_df.index.hour+1)/24)
-#aggr_df['diurnal_3'] = np.sin(4*np.pi*(aggr_df.index.hour+1)/24)
-#aggr_df['diurnal_4'] = np.cos(4*np.pi*(aggr_df.index.hour+1)/24)
-aggr_df['diurnal'] = np.maximum(np.sin(2*np.pi*(aggr_df.index.hour+3)/24), np.zeros(len(aggr_df)))
-aggr_df['month_cos'] = np.cos(2*np.pi*(aggr_df.index.month+1)/12)
-
+#solar_df['diurnal_1'] = np.sin(2*np.pi*(solar_df.index.hour+1)/24)
+#solar_df['diurnal_2'] = np.cos(2*np.pi*(solar_df.index.hour+1)/24)
+#solar_df['diurnal_3'] = np.sin(4*np.pi*(solar_df.index.hour+1)/24)
+#solar_df['diurnal_4'] = np.cos(4*np.pi*(solar_df.index.hour+1)/24)
 #%%
 for col in ['SSRD', 'STRD', 'TSR', 'TP']:
     if col != 'TP':
@@ -830,23 +741,9 @@ aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
 #!!!! Add randomization based on the iteration counter here
 critical_fractile = config['crit_quant'][0]
 
-if target_problem == 'newsvendor':
-    config['risk_aversion'] = [0]
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
-                                                   config['risk_aversion'])]
-elif (target_problem == 'reg_trad') or (target_problem == 'pwl'):
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
-                                                   config['risk_aversion'])]
+tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'])]
 
 #%%
-# Set up some problem parameters
-#all_zones = [f'Z{i}' for i in range(1,11)]
-
-# number of forecasts to combine
-#N_experts = config['N_experts']
-
-# number of observations to train prob. forecasting model
-#N_sample = len(aggr_df)//4
 
 step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
@@ -855,10 +752,8 @@ predictor_names = list(aggr_df.columns)
 predictor_names.remove('POWER')
 
 weather_variables = ['tclw','tciw','SP','rh','tcc','10u','10v','2T','SSRD','STRD','TSR','TP']
-calendar_ordinal_variables = ['Hour', 'Month']
-calendar_sine_variables = ['diurnal', 'month_cos']
-
-all_variables = weather_variables + calendar_ordinal_variables + calendar_sine_variables
+calendar_variables = ['Hour', 'Month']
+all_variables = weather_variables + calendar_variables
 
 #%%
 
@@ -875,13 +770,9 @@ trainX_weather = aggr_df[weather_variables][config['start_date']:config['split_d
 comb_trainX_weather = aggr_df[weather_variables][config['split_date_prob']:config['split_date_comb']]
 testX_weather = aggr_df[weather_variables][config['split_date_comb']:]
 
-trainX_date = aggr_df[calendar_ordinal_variables][config['start_date']:config['split_date_prob']]
-comb_trainX_date = aggr_df[calendar_ordinal_variables][config['split_date_prob']:config['split_date_comb']]
-testX_date = aggr_df[calendar_ordinal_variables][config['split_date_comb']:]
-
-trainX_date_sine = aggr_df[calendar_sine_variables][config['start_date']:config['split_date_prob']]
-comb_trainX_date_sine = aggr_df[calendar_sine_variables][config['split_date_prob']:config['split_date_comb']]
-testX_date_sine = aggr_df[calendar_sine_variables][config['split_date_comb']:]
+trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date_prob']]
+comb_trainX_date = aggr_df[calendar_variables][config['split_date_prob']:config['split_date_comb']]
+testX_date = aggr_df[calendar_variables][config['split_date_comb']:]
 
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
@@ -909,9 +800,9 @@ except:
 for tup in tuple_list[row_counter:]:
 
     target_zone = tup[0]    
-    critical_fractile = tup[1]
-    risk_aversion = tup[2]
-        
+    risk_aversion = tup[1]
+    
+    # !!! Add case here
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
     
     np.random.seed(1234)
@@ -1044,7 +935,6 @@ for tup in tuple_list[row_counter:]:
         plt.ylabel('Pinball loss')
         plt.xlabel('Quantile')
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
-        plt.savefig(f'{cd}\\plots\\pinball_loss_model.pdf')
         plt.show()
         #%%
         #% Visualize some prob. forecasts for sanity check
@@ -1060,13 +950,6 @@ for tup in tuple_list[row_counter:]:
         plt.legend()
         plt.show()
         
-        
-        ### Define the rest of the supervised learning parameters     
-        # projection step (used for gradient-based methods)
-        
-        #y_proj = cp.Variable(N_experts)
-        #y_hat = cp.Parameter(N_experts)
-        #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
         N_experts = len(all_learners)
     #%%
     train_targetY = comb_trainY.values.reshape(-1)
@@ -1079,34 +962,26 @@ for tup in tuple_list[row_counter:]:
 
     tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
     tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
+        
+    tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
+    tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
+    tensor_testX = torch.FloatTensor(testX_date.values)
     
-    #tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
-    #tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
-    #tensor_testX = torch.FloatTensor(testX_date.values)
-
-    tensor_trainX = torch.FloatTensor(comb_trainX_date_sine[:-valid_obs].values)
-    tensor_validX = torch.FloatTensor(comb_trainX_date_sine[-valid_obs:].values)
-    tensor_testX = torch.FloatTensor(testX_date_sine.values)
-
-    #tensor_trainX = torch.FloatTensor(comb_trainX_onehot[:-valid_obs])
-    #tensor_validX = torch.FloatTensor(comb_trainX_onehot[-valid_obs:])
-    #tensor_testX = torch.FloatTensor(testX_onehot)
-
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
     
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
     
     
-    trainZopt = np.zeros((n_train_obs, len(train_p_list)))
-    testZopt = np.zeros((n_test_obs, len(test_p_list)))
+    trainZopt = N_experts*[np.zeros((n_train_obs, grid['n_unit']))]
+    testZopt = N_experts*[np.zeros((n_test_obs, grid['n_unit']))]
         
     print('Finding optimal decisions in training set')
     for j in range(N_experts):
-        temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, 
-                                    crit_quant = critical_fractile)
-        trainZopt[:,j] = temp_z_opt
-
+        temp_z_opt = solve_stoch_sched(grid, y_supp, train_p_list[j], risk_aversion = risk_aversion)
+        trainZopt[j] = temp_z_opt
+        
+    #%%
     ###########% Static forecast combinations
     lambda_static_dict = {}
         
@@ -1119,18 +994,15 @@ for tup in tuple_list[row_counter:]:
                 
     
     # Set weights to in-sample performance
-    lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, problem = target_problem,
-                                                 crit_quant = critical_fractile, 
-                                                 support = y_supp, risk_aversion = risk_aversion)
+    lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, support = y_supp, risk_aversion = risk_aversion)
     
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
-    lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile,
-                                  support = y_supp, bounds = False, risk_aversion = risk_aversion)
+    #lambda_ = averaging_decisions(grid, train_targetY, trainZopt, support = y_supp, bounds = False, risk_aversion = risk_aversion)
 
     lambda_static_dict['Insample'] = lambda_tuned_inv    
-    lambda_static_dict['SalvaBench'] = lambda_
+    #lambda_static_dict['SalvaBench'] = lambda_
 
-    
+    #%%   
     #% CRPS learning
     
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
@@ -1151,32 +1023,31 @@ for tup in tuple_list[row_counter:]:
             lambda_crps = to_np(lpool_crps_model.weights)
     
         
-        lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
+        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
         
     lambda_static_dict['CRPS'] = lambda_crps
     
-    #%
-    ##### Decision-focused combination for different values of gamma        
+    #%%
+    
+    ##### Decision-focused combination for different values of gamma     
     for gamma in config['gamma_list']:
         
-        lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                    gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
-                                                    apply_softmax = True, regularizer=None)
+        lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), grid = grid, gamma = gamma, apply_softmax = True)
         
-        optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
+        optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
-        lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
+        lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
                                           patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
         if apply_softmax:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+            lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
         else:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
+            lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
 
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
-    #%
+    #%%
         
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
@@ -1192,6 +1063,7 @@ for tup in tuple_list[row_counter:]:
     adaptive_models_dict = {}
     
     adapt_models = False
+    #!!!! Update these
     if adapt_models:
         ### CRPS/ Linear Regression
         lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
@@ -1254,7 +1126,8 @@ for tup in tuple_list[row_counter:]:
                                                   optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
-
+            
+    #%%
     #% Evaluate performance for all models
     #%
     static_models = list(lambda_static_dict) 
@@ -1262,7 +1135,9 @@ for tup in tuple_list[row_counter:]:
     all_models = static_models + adaptive_models
 
     lambda_adapt_dict = {}
-    Prescriptions = pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
+    Prescriptions = {}
+    
+    #pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
     
     # Store pinball loss and Decision cost for task-loss
     temp_QS = pd.DataFrame()
@@ -1287,17 +1162,17 @@ for tup in tuple_list[row_counter:]:
             lambda_adapt_dict[m] = adaptive_models_dict[m].predict_weights(tensor_testX)
             # Combine PDFs for each observation
             temp_pdf = np.array([sum([lambda_adapt_dict[m][i,j]*test_p_list[j][i] for j in range(N_experts)]) for i in range(n_test_obs)])    
+          
+        temp_prescriptions = solve_stoch_sched(grid, y_supp, temp_pdf, risk_aversion = risk_aversion)
 
-        temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion, 
-                                            crit_quant = critical_fractile)
-           
         Prescriptions[m] = temp_prescriptions
         print(m)
             
         # Estimate task-loss for specific model
         #%
-        temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY.values, 
-                                          target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+        
+        temp_Decision_cost[m] = scheduling_task_loss(grid, Prescriptions[m], testY.values)
+
         #%
         print(m)
         

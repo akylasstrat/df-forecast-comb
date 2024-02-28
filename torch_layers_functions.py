@@ -700,6 +700,256 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
         average_loss = total_loss / len(data_loader)
         return average_loss
+
+class LinearPoolSchedLayer(nn.Module):        
+    def __init__(self, num_inputs, support, grid, 
+                 gamma, apply_softmax = False):
+        super(LinearPoolSchedLayer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.num_inputs = num_inputs
+        self.grid = grid
+        self.support = support
+        #self.risk_aversion = risk_aversion
+        self.gamma = gamma
+        self.apply_softmax = apply_softmax
+        
+        n_locations = len(self.support)
+        
+        #### Stochastic scheduling layer        
+        prob_weights = cp.Parameter(n_locations)
+
+        ###### DA variables
+        p_DA = cp.Variable((grid['n_unit']))
+        slack_DA = cp.Variable(1)
+        cost_DA = cp.Variable(1)
+
+        ###### RT variables
+        r_up = cp.Variable((grid['n_unit'], n_locations))
+        r_down = cp.Variable((grid['n_unit'], n_locations))
+
+        g_shed = cp.Variable((1, n_locations))
+        l_shed = cp.Variable((1, n_locations))
+        cost_RT = cp.Variable(n_locations)
+        
+        DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1)] \
+                         #+ [cost_DA == grid['Cost']@p_DA]\
+                         #+ [p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() >= grid['Pd'].sum()]
+
+                    #+ [slack_DA >= 0]\
+        
+        
+        RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
+        
+        for s in range(n_locations):
+            RT_constraints += [r_up[:,s] <= grid['Pmax'].reshape(-1) - p_DA, r_up[:,s] <= grid['R_u_max'].reshape(-1)]            
+            RT_constraints += [r_down[:,s] <= p_DA, r_down[:,s] <= grid['R_d_max'].reshape(-1)]            
+            #RT_constraints += [g_shed[:,s] <= p_DA]            
+            # balancing
+            RT_constraints += [p_DA.sum() + r_up[:,s].sum() - r_down[:,s].sum() 
+                               -g_shed[:,s].sum() + grid['w_capacity']*self.support[s] + l_shed[:,s].sum() == grid['Pd'].sum()]
+            
+            RT_constraints += [cost_RT[s] ==  (grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] \
+                               +grid['VOLL']*(g_shed[:,s].sum() + l_shed[:,s].sum())]            
+        
+        #l2_regularization = (prob_weights@sq_error)
+        objective_funct = cp.Minimize( grid['Cost']@p_DA +  prob_weights@cost_RT ) 
+        sched_problem = cp.Problem(objective_funct, DA_constraints + RT_constraints)
+         
+        self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
+                                           variables = [p_DA, r_up, r_down, g_shed, l_shed, cost_RT] )
+        
+        #### RT layer: takes as input parameter the dispatch decisions, optimizes the real-time dispatch
+
+        p_gen = cp.Parameter(grid['n_unit'])
+        w_actual = cp.Parameter(1)
+                
+        ###### RT variables
+        r_up = cp.Variable((grid['n_unit']))
+        r_down = cp.Variable((grid['n_unit']))
+        
+        g_shed = cp.Variable((1))
+        l_shed = cp.Variable((1))
+        cost_RT = cp.Variable(1)
+                
+        RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]        
+        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen, r_up <= grid['R_u_max'].reshape(-1)]            
+        RT_sched_constraints += [r_down <= p_gen, r_down <= grid['R_d_max'].reshape(-1)]            
+        #RT_sched_constraints += [g_shed <= p_gen.sum()]            
+        
+        # balancing
+        RT_sched_constraints += [p_gen.sum() + r_up.sum() - r_down.sum() -g_shed.sum() + grid['w_capacity']*w_actual + l_shed.sum() == grid['Pd'].sum()]
+        RT_sched_constraints += [cost_RT == (grid['C_up']-grid['Cost'])@r_up + (grid['Cost'] - grid['C_down'])@r_down +grid['VOLL']*(g_shed.sum() + l_shed.sum()) ]
+        
+        #l2_regularization = (prob_weights@sq_error)
+        objective_funct = cp.Minimize( cost_RT ) 
+        rt_problem = cp.Problem(objective_funct, RT_sched_constraints)
+         
+        self.rt_layer = CvxpyLayer(rt_problem, parameters=[p_gen, w_actual],
+                                           variables = [r_up, r_down, g_shed, l_shed, cost_RT] )
+
+    def forward(self, list_inputs):
+        """
+        Forward pass of the newvendor layer.
+
+        Args:
+            list_inputs: A list of of input tensors/ PDFs.
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors/ combination of PDFs.
+        """
+        # Ensure that the weights are in the range [0, 1] using softmax activation
+        if self.apply_softmax:
+            weights = torch.nn.functional.softmax(self.weights, dim = 0)
+        else:
+            weights = self.weights
+
+        # Apply the weights element-wise to each input tensor
+        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_pdf = sum(weighted_inputs)
+
+        # Pass the combined output to the CVXPY layer
+        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':20000})
+            
+        return combined_pdf, cvxpy_output
+    
+    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
+                    relative_tolerance = 0):
+        
+        # define projection problem for backward pass
+        if (projection)and(self.apply_softmax != True):     
+            lambda_proj = cp.Variable(self.num_inputs)
+            lambda_hat = cp.Parameter(self.num_inputs)
+            proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
+        
+        
+        L_t = []
+        best_train_loss = 1e7
+        best_val_loss = 1e7 
+        early_stopping_counter = 0
+        best_weights = copy.deepcopy(self.state_dict())
+
+        for epoch in range(epochs):
+            # activate train functionality
+            self.train()
+            running_loss = 0.0
+            # sample batch data
+            for batch_data in train_loader:
+                
+                y_batch = batch_data[-1]
+                
+                # clear gradients
+                optimizer.zero_grad()
+                
+                # forward pass: combine forecasts and each stochastic ED problem
+                print('check1')
+                output_hat = self.forward(batch_data[:-1])
+                print('check2')
+
+                pdf_comb_hat = output_hat[0]
+                cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+                decisions_hat = output_hat[1][0]
+                
+                p_hat = decisions_hat[0]
+                
+                # solve RT layer, find redispatch cost
+                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':20000})                
+
+                # CRPS of combination
+                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+
+                # total loss
+                loss = rt_output[-1].mean() + self.gamma*crps_i/len(self.support)
+                    
+                # backward pass
+                loss.backward()
+                optimizer.step()
+                
+                # Apply projection
+                if (projection)and(self.apply_softmax != True):     
+                    lambda_hat.value = to_np(self.weights)
+                    proj_problem.solve(solver = 'GUROBI')
+                    # update parameter values
+                    with torch.no_grad():
+                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
+                
+                running_loss += loss.item()
+                
+            if epoch%1 == 0:
+                print(torch.nn.functional.softmax(self.weights))
+                
+            average_train_loss = running_loss / len(train_loader)
+                                        
+            if validation == True:
+                # evaluate performance on stand-out validation set
+                val_loss = self.evaluate(val_loader)
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+                
+                if (val_loss < best_val_loss) and ( (best_val_loss-val_loss)/best_val_loss > relative_tolerance):
+                    best_val_loss = val_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        return
+            else:
+                # only evaluate on training data set
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+    
+                if (average_train_loss < best_train_loss) and ( (best_train_loss-average_train_loss)/best_train_loss > relative_tolerance):
+                    best_train_loss = average_train_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                    
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        return
+                
+
+    def evaluate(self, data_loader):
+        # evaluate loss criterion/ used for estimating validation loss
+        self.eval()
+        total_loss = 0.0
+        with torch.no_grad():
+            for batch_data in data_loader:
+                y_batch = batch_data[-1]
+
+                # forward pass: combine forecasts and each stochastic ED problem
+                output_hat = self.forward(batch_data[:-1])
+
+                pdf_comb_hat = output_hat[0]
+                cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+                decisions_hat = output_hat[1][0]
+                
+                p_hat = decisions_hat[0]
+                
+                # solve RT layer, find redispatch cost
+                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':20000})                
+
+                # CRPS of combination
+                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+
+                # total loss
+                loss = rt_output[-1].mean() + self.gamma*crps_i/len(self.support)
+
+                total_loss += loss.item()
+                
+        average_loss = total_loss / len(data_loader)
+        return average_loss
     
 class LinearPoolCRPSLayer(nn.Module):        
     def __init__(self, num_inputs, support, apply_softmax = False):
