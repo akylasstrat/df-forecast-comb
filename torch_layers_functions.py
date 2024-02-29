@@ -703,7 +703,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
-                 gamma, apply_softmax = False):
+                 gamma, regularization = 0, apply_softmax = False):
         super(LinearPoolSchedLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -711,6 +711,7 @@ class LinearPoolSchedLayer(nn.Module):
         self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
         self.num_inputs = num_inputs
         self.grid = grid
+        self.regularization = regularization
         self.support = support
         #self.risk_aversion = risk_aversion
         self.gamma = gamma
@@ -735,10 +736,11 @@ class LinearPoolSchedLayer(nn.Module):
         cost_RT = cp.Variable(n_locations)
         
         DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1)] \
-                         #+ [cost_DA == grid['Cost']@p_DA]\
-                         #+ [p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() >= grid['Pd'].sum()]
+                         #+ [p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) >= grid['Pd'].sum()]
 
-                    #+ [slack_DA >= 0]\
+                         #+ [cost_DA == grid['Cost']@p_DA]\
+
+                            #+ [slack_DA >= 0]\
         
         
         RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
@@ -864,7 +866,7 @@ class LinearPoolSchedLayer(nn.Module):
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
 
                 # total loss
-                loss = rt_output[-1].mean() + self.gamma*crps_i/len(self.support)
+                loss = rt_output[-1].mean() + self.gamma*crps_i
                     
                 # backward pass
                 loss.backward()
