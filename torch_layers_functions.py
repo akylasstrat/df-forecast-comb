@@ -703,12 +703,17 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
-                 gamma, regularization = 0, apply_softmax = False):
+                 gamma, regularization = 0, apply_softmax = False, initial_weights = None):
         super(LinearPoolSchedLayer, self).__init__()
 
         # Initialize learnable weight parameters
         #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
-        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        try:
+            if initial_weights == None:         
+                self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        except:
+            self.weights = nn.Parameter(torch.FloatTensor(initial_weights).requires_grad_())
+        print(self.weights)
         self.num_inputs = num_inputs
         self.grid = grid
         self.regularization = regularization
@@ -785,7 +790,6 @@ class LinearPoolSchedLayer(nn.Module):
         RT_sched_constraints += [p_gen.sum() + r_up.sum() - r_down.sum() -g_shed.sum() + grid['w_capacity']*w_actual + l_shed.sum() == grid['Pd'].sum()]
         RT_sched_constraints += [cost_RT == (grid['C_up']-grid['Cost'])@r_up + (grid['Cost'] - grid['C_down'])@r_down +grid['VOLL']*(g_shed.sum() + l_shed.sum()) ]
         
-        #l2_regularization = (prob_weights@sq_error)
         objective_funct = cp.Minimize( cost_RT ) 
         rt_problem = cp.Problem(objective_funct, RT_sched_constraints)
          
@@ -815,7 +819,7 @@ class LinearPoolSchedLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':20000})
+        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':50000})
             
         return combined_pdf, cvxpy_output
     
@@ -848,9 +852,7 @@ class LinearPoolSchedLayer(nn.Module):
                 optimizer.zero_grad()
                 
                 # forward pass: combine forecasts and each stochastic ED problem
-                print('check1')
                 output_hat = self.forward(batch_data[:-1])
-                print('check2')
 
                 pdf_comb_hat = output_hat[0]
                 cdf_comb_hat = pdf_comb_hat.cumsum(1)
@@ -860,7 +862,7 @@ class LinearPoolSchedLayer(nn.Module):
                 p_hat = decisions_hat[0]
                 
                 # solve RT layer, find redispatch cost
-                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':20000})                
+                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':50000})                
 
                 # CRPS of combination
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
@@ -940,13 +942,13 @@ class LinearPoolSchedLayer(nn.Module):
                 p_hat = decisions_hat[0]
                 
                 # solve RT layer, find redispatch cost
-                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':20000})                
+                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':50000})                
 
                 # CRPS of combination
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
 
                 # total loss
-                loss = rt_output[-1].mean() + self.gamma*crps_i/len(self.support)
+                loss = rt_output[-1].mean() + self.gamma*crps_i
 
                 total_loss += loss.item()
                 

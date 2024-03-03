@@ -407,7 +407,7 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2]
+    params['target_zone'] = [1]
     
     
     params['crit_quant'] = np.arange(0.1, 0.4, 0.1).round(2)
@@ -545,14 +545,20 @@ learning_rate = nn_hparam['learning_rate']
 apply_softmax = nn_hparam['apply_softmax']
 row_counter = 0
 
-try:
-    Decision_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv', index_col = 0)
-    QS_df = pd.read_csv(f'{results_path}\\{filename_prefix}_QS.csv', index_col = 0)
-    mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
-except:
-    Decision_cost = pd.DataFrame()
-    QS_df = pd.DataFrame()
-    mean_QS = pd.DataFrame()
+#try:
+#    Decision_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv', index_col = 0)
+#    QS_df = pd.read_csv(f'{results_path}\\{filename_prefix}_QS.csv', index_col = 0)
+#    mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
+#except:
+#    Decision_cost = pd.DataFrame()
+#    QS_df = pd.DataFrame()
+#    mean_QS = pd.DataFrame()
+
+RT_cost = pd.DataFrame()
+DA_cost = pd.DataFrame()
+
+QS_df = pd.DataFrame()
+mean_QS = pd.DataFrame()
 
 #%%
 
@@ -734,7 +740,8 @@ for tup in tuple_list[row_counter:]:
     
     trainZopt = N_experts*[np.zeros((n_train_obs, grid['n_unit']))]
     testZopt = N_experts*[np.zeros((n_test_obs, grid['n_unit']))]
-    
+
+    stop_here
     print('Finding optimal decisions in training set')
     for j in range(N_experts):
         temp_z_opt = solve_stoch_sched(grid, y_supp, train_p_list[j], regularization = risk_aversion)
@@ -788,9 +795,13 @@ for tup in tuple_list[row_counter:]:
     
     #%%
     ##### Decision-focused combination for different values of gamma     
+    from torch_layers_functions import * 
+    
     for gamma in config['gamma_list']:
         
-        lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), grid = grid, gamma = gamma, apply_softmax = True)
+        lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
+                                                 grid = grid, gamma = gamma, apply_softmax = True, 
+                                                 initial_weights = to_np(lpool_crps_model.weights))
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
@@ -800,12 +811,12 @@ for tup in tuple_list[row_counter:]:
             lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
         else:
             lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
-
+#%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
-    #%%
+    
         
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
@@ -814,9 +825,9 @@ for tup in tuple_list[row_counter:]:
     train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
     valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size)
             
-    tensor_trainZopt = torch.FloatTensor(trainZopt[:-valid_obs])
-    tensor_validZopt = torch.FloatTensor(trainZopt[-valid_obs:])
-    tensor_testZopt = torch.FloatTensor(testZopt)
+    #tensor_trainZopt = torch.FloatTensor(trainZopt[:-valid_obs])
+    #tensor_validZopt = torch.FloatTensor(trainZopt[-valid_obs:])
+    #tensor_testZopt = torch.FloatTensor(testZopt)
     
     adaptive_models_dict = {}
     
@@ -886,6 +897,10 @@ for tup in tuple_list[row_counter:]:
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
             
     #%%
+    lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
+    lambda_static_dict = lamda_static_df.to_dict('list')
+    adaptive_models_dict = {}
+    #%%
     #% Evaluate performance for all models
     #%
     static_models = list(lambda_static_dict) 
@@ -930,7 +945,7 @@ for tup in tuple_list[row_counter:]:
         #%
         
         temp_Decision_cost[m] = scheduling_task_loss(grid, Prescriptions[m], testY.values)
-
+        temp_Decision_cost[m] = temp_Decision_cost[m] + (Prescriptions[m]@grid['Cost']).mean()
         #%
         print(m)
         
@@ -961,7 +976,8 @@ for tup in tuple_list[row_counter:]:
 
     print('CRPS')
     print(temp_mean_QS[all_models].mean().round(4))
-            
+    stop_here
+    
     try:
         Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)            
         QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
@@ -977,7 +993,7 @@ for tup in tuple_list[row_counter:]:
         mean_QS.to_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv')
 
         #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
-    lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
-    lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
+        lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+        lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
 #%%    
     row_counter += 1        
