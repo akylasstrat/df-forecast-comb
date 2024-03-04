@@ -407,7 +407,7 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [1]
+    params['target_zone'] = [2]
     
     
     params['crit_quant'] = np.arange(0.1, 0.4, 0.1).round(2)
@@ -425,7 +425,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -557,7 +557,7 @@ row_counter = 0
 RT_cost = pd.DataFrame()
 DA_cost = pd.DataFrame()
 
-QS_df = pd.DataFrame()
+#QS_df = pd.DataFrame()
 mean_QS = pd.DataFrame()
 
 #%%
@@ -741,7 +741,6 @@ for tup in tuple_list[row_counter:]:
     trainZopt = N_experts*[np.zeros((n_train_obs, grid['n_unit']))]
     testZopt = N_experts*[np.zeros((n_test_obs, grid['n_unit']))]
 
-    stop_here
     print('Finding optimal decisions in training set')
     for j in range(N_experts):
         temp_z_opt = solve_stoch_sched(grid, y_supp, train_p_list[j], regularization = risk_aversion)
@@ -800,8 +799,7 @@ for tup in tuple_list[row_counter:]:
     for gamma in config['gamma_list']:
         
         lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, apply_softmax = True, 
-                                                 initial_weights = to_np(lpool_crps_model.weights))
+                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'det')
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
@@ -811,6 +809,12 @@ for tup in tuple_list[row_counter:]:
             lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
         else:
             lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
+            
+        if config['save']:
+            #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+            lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+            lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
+
 #%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
@@ -897,7 +901,7 @@ for tup in tuple_list[row_counter:]:
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
             
     #%%
-    lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
+        lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
     lambda_static_dict = lamda_static_df.to_dict('list')
     adaptive_models_dict = {}
     #%%
@@ -913,15 +917,15 @@ for tup in tuple_list[row_counter:]:
     #pd.DataFrame(data = np.zeros((n_test_obs, len(all_models))), columns = all_models)
     
     # Store pinball loss and Decision cost for task-loss
-    temp_QS = pd.DataFrame()
-    temp_QS['Target'] = [target_zone]
-    temp_QS['risk_aversion'] = risk_aversion
+    #temp_QS = pd.DataFrame()
+    #temp_QS['Target'] = [target_zone]
+    #temp_QS['risk_aversion'] = risk_aversion
     
-    temp_Decision_cost = pd.DataFrame()
-    temp_Decision_cost['Quantile'] = [critical_fractile]
-    temp_Decision_cost['risk_aversion'] = risk_aversion
-    temp_Decision_cost['Target'] = target_zone
-    temp_mean_QS = temp_Decision_cost.copy()
+    temp_RT_cost = pd.DataFrame()
+    temp_RT_cost['risk_aversion'] = [risk_aversion]
+    temp_RT_cost['Target'] = [target_zone]
+    temp_DA_cost = temp_RT_cost.copy()
+    temp_mean_QS = temp_RT_cost.copy()
 
     target_quant = np.arange(0.1, 1, 0.1).round(2)
     print('Estimating out-of-sample performance...')
@@ -944,8 +948,8 @@ for tup in tuple_list[row_counter:]:
         # Estimate task-loss for specific model
         #%
         
-        temp_Decision_cost[m] = scheduling_task_loss(grid, Prescriptions[m], testY.values)
-        temp_Decision_cost[m] = temp_Decision_cost[m] + (Prescriptions[m]@grid['Cost']).mean()
+        temp_RT_cost[m] = scheduling_task_loss(grid, Prescriptions[m], testY.values)
+        temp_DA_cost[m] = (Prescriptions[m]@grid['Cost']).mean()
         #%
         print(m)
         
@@ -955,13 +959,13 @@ for tup in tuple_list[row_counter:]:
         temp_qs = 100*pinball(temp_q_forecast, testY.values, target_quant).round(4)
         print(m)
 
-        temp_QS[m] = [temp_qs]
+        #temp_QS[m] = [temp_qs]
         
-        temp_CDF = temp_pdf.cumsum(1)
-        H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY.values.reshape(-1,1)
-        
-        CRPS = 100*np.square(temp_CDF - H_i).mean()            
-        temp_mean_QS[m] = CRPS
+        #temp_CDF = temp_pdf.cumsum(1)
+        #H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY.values.reshape(-1,1)
+        #CRPS = 100*np.square(temp_CDF - H_i).mean()            
+
+        temp_mean_QS[m] = temp_qs.mean()
 
     #    if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
     #        plt.plot(temp_qs, label = m)
@@ -971,29 +975,36 @@ for tup in tuple_list[row_counter:]:
     #plt.xlabel('Quantile')
     #plt.show()
     #%
-    print('Decision Cost')
-    print(temp_Decision_cost[all_models].mean().round(4))
+    print('DA Decision Cost')
+    print(temp_DA_cost[all_models].mean().round(4))
 
+    print('RT Decision Cost')
+    print(temp_RT_cost[all_models].mean().round(4))
+
+    print('Total Decision Cost')
+    print((temp_DA_cost + temp_RT_cost)[all_models].mean().round(4))
+    
     print('CRPS')
     print(temp_mean_QS[all_models].mean().round(4))
-    stop_here
+    
     
     try:
-        Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)            
-        QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
+        DA_cost = pd.concat([DA_cost, temp_DA_cost], ignore_index = True)            
+        RT_cost = pd.concat([RT_cost, temp_RT_cost], ignore_index = True)            
         mean_QS = pd.concat([mean_QS, temp_mean_QS], ignore_index = True)        
     except:
-        Decision_cost = temp_Decision_cost.copy()
-        QS_df = temp_QS.copy()            
+        DA_cost = temp_DA_cost.copy()
+        RT_cost = temp_RT_cost.copy()
         mean_QS = temp_mean_QS.copy()
 
     if config['save']:
-        Decision_cost.to_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv')
-        QS_df.to_csv(f'{results_path}\\{filename_prefix}_QS.csv')
+        DA_cost.to_csv(f'{results_path}\\{filename_prefix}_DA_cost.csv')
+        RT_cost.to_csv(f'{results_path}\\{filename_prefix}_RT_cost.csv')
+        #QS_df.to_csv(f'{results_path}\\{filename_prefix}_QS.csv')
         mean_QS.to_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv')
 
         #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
         lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
-#%%    
+
     row_counter += 1        

@@ -703,7 +703,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
-                 gamma, regularization = 0, apply_softmax = False, initial_weights = None):
+                 gamma, regularization = 0, apply_softmax = False, initial_weights = None, clearing_type = 'det'):
         super(LinearPoolSchedLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -715,6 +715,7 @@ class LinearPoolSchedLayer(nn.Module):
             self.weights = nn.Parameter(torch.FloatTensor(initial_weights).requires_grad_())
         print(self.weights)
         self.num_inputs = num_inputs
+        self.clearing_type = clearing_type
         self.grid = grid
         self.regularization = regularization
         self.support = support
@@ -727,47 +728,65 @@ class LinearPoolSchedLayer(nn.Module):
         #### Stochastic scheduling layer        
         prob_weights = cp.Parameter(n_locations)
 
-        ###### DA variables
-        p_DA = cp.Variable((grid['n_unit']))
-        slack_DA = cp.Variable(1)
-        cost_DA = cp.Variable(1)
-
-        ###### RT variables
-        r_up = cp.Variable((grid['n_unit'], n_locations))
-        r_down = cp.Variable((grid['n_unit'], n_locations))
-
-        g_shed = cp.Variable((1, n_locations))
-        l_shed = cp.Variable((1, n_locations))
-        cost_RT = cp.Variable(n_locations)
-        
-        DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1)] \
-                         #+ [p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) >= grid['Pd'].sum()]
-
-                         #+ [cost_DA == grid['Cost']@p_DA]\
-
-                            #+ [slack_DA >= 0]\
-        
-        
-        RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
-        
-        for s in range(n_locations):
-            RT_constraints += [r_up[:,s] <= grid['Pmax'].reshape(-1) - p_DA, r_up[:,s] <= grid['R_u_max'].reshape(-1)]            
-            RT_constraints += [r_down[:,s] <= p_DA, r_down[:,s] <= grid['R_d_max'].reshape(-1)]            
-            #RT_constraints += [g_shed[:,s] <= p_DA]            
-            # balancing
-            RT_constraints += [p_DA.sum() + r_up[:,s].sum() - r_down[:,s].sum() 
-                               -g_shed[:,s].sum() + grid['w_capacity']*self.support[s] + l_shed[:,s].sum() == grid['Pd'].sum()]
+        if self.clearing_type == 'stoch':
+            ###### DA variables    
+            p_DA = cp.Variable((grid['n_unit']))
+            slack_DA = cp.Variable(1)
+            cost_DA = cp.Variable(1)
+    
+            ###### RT variables
+            r_up = cp.Variable((grid['n_unit'], n_locations))
+            r_down = cp.Variable((grid['n_unit'], n_locations))
+    
+            g_shed = cp.Variable((1, n_locations))
+            l_shed = cp.Variable((1, n_locations))
+            cost_RT = cp.Variable(n_locations)
             
-            RT_constraints += [cost_RT[s] ==  (grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] \
-                               +grid['VOLL']*(g_shed[:,s].sum() + l_shed[:,s].sum())]            
+            DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1)] \
+                             #+ [p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) >= grid['Pd'].sum()]
+    
+                             #+ [cost_DA == grid['Cost']@p_DA]\
+    
+                                #+ [slack_DA >= 0]\
+            
+            
+            RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
+            
+            for s in range(n_locations):
+                RT_constraints += [r_up[:,s] <= grid['Pmax'].reshape(-1) - p_DA, r_up[:,s] <= grid['R_u_max'].reshape(-1)]            
+                RT_constraints += [r_down[:,s] <= p_DA, r_down[:,s] <= grid['R_d_max'].reshape(-1)]            
+                #RT_constraints += [g_shed[:,s] <= p_DA]            
+                # balancing
+                RT_constraints += [p_DA.sum() + r_up[:,s].sum() - r_down[:,s].sum() 
+                                   -g_shed[:,s].sum() + grid['w_capacity']*self.support[s] + l_shed[:,s].sum() == grid['Pd'].sum()]
+                
+                RT_constraints += [cost_RT[s] ==  (grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] \
+                                   +grid['VOLL']*(g_shed[:,s].sum() + l_shed[:,s].sum())]            
+            
+            #l2_regularization = (prob_weights@sq_error)
+            objective_funct = cp.Minimize( grid['Cost']@p_DA +  prob_weights@cost_RT ) 
+            sched_problem = cp.Problem(objective_funct, DA_constraints + RT_constraints)
+             
+            self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
+                                               variables = [p_DA, r_up, r_down, g_shed, l_shed, cost_RT] )
         
-        #l2_regularization = (prob_weights@sq_error)
-        objective_funct = cp.Minimize( grid['Cost']@p_DA +  prob_weights@cost_RT ) 
-        sched_problem = cp.Problem(objective_funct, DA_constraints + RT_constraints)
-         
-        self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
-                                           variables = [p_DA, r_up, r_down, g_shed, l_shed, cost_RT] )
+        elif self.clearing_type == 'det':
+            ###### DA variables    
+            p_DA = cp.Variable((grid['n_unit']))
+            slack_DA = cp.Variable(1)
+            cost_DA = cp.Variable(1)
+                    
+            DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), slack_DA >= 0, 
+                              p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() >= grid['Pd'].sum(), 
+                              cost_DA == grid['Cost']@p_DA]
+
+            objective_funct = cp.Minimize( grid['Cost']@p_DA) 
+            sched_problem = cp.Problem(objective_funct, DA_constraints)
+             
+            self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
+                                               variables = [p_DA, slack_DA, cost_DA])
         
+
         #### RT layer: takes as input parameter the dispatch decisions, optimizes the real-time dispatch
 
         p_gen = cp.Parameter(grid['n_unit'])
