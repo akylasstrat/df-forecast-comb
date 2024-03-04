@@ -617,7 +617,7 @@ for j, m in enumerate(all_models):
     
     # Evaluate QS (approximation of CRPS) for each model
     # find quantile forecasts
-    temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(nobs_test)])            
+    temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(nobs_test)])
     temp_qs = 100*pinball(temp_q_forecast, Y_test, target_quant).round(4)
     print(m)
 
@@ -626,7 +626,7 @@ for j, m in enumerate(all_models):
     temp_CDF = temp_pdf.cumsum(1)
     H_i = 1*np.repeat(y_supp.reshape(1,-1), len(Y_test), axis = 0)>=Y_test.reshape(-1,1)
     
-    CRPS = 100*np.square(temp_CDF - H_i).mean()            
+    CRPS = 100*np.square(temp_CDF - H_i).mean()
     temp_mean_QS[m] = CRPS
 
 #    if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
