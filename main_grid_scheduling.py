@@ -794,7 +794,7 @@ except:
     Decision_cost = pd.DataFrame()
     QS_df = pd.DataFrame()
     mean_QS = pd.DataFrame()
-asdf
+
 #%%
 
 for tup in tuple_list[row_counter:]:
