@@ -703,7 +703,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
-                 gamma, regularization = 0, apply_softmax = False, initial_weights = None, clearing_type = 'det'):
+                 gamma, regularization = 0, apply_softmax = False, initial_weights = None, clearing_type = 'det', include_network = False):
         super(LinearPoolSchedLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -719,6 +719,7 @@ class LinearPoolSchedLayer(nn.Module):
         self.grid = grid
         self.regularization = regularization
         self.support = support
+        self.include_network = include_network
         #self.risk_aversion = risk_aversion
         self.gamma = gamma
         self.apply_softmax = apply_softmax
@@ -778,9 +779,9 @@ class LinearPoolSchedLayer(nn.Module):
                     
             DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), slack_DA >= 0, 
                               p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() >= grid['Pd'].sum(), 
-                              cost_DA == grid['Cost']@p_DA]
+                              cost_DA == grid['Cost']@p_DA + grid['VOLL']*slack_DA.sum()]
 
-            objective_funct = cp.Minimize( grid['Cost']@p_DA) 
+            objective_funct = cp.Minimize( cost_DA ) 
             sched_problem = cp.Problem(objective_funct, DA_constraints)
              
             self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
@@ -788,7 +789,8 @@ class LinearPoolSchedLayer(nn.Module):
         
 
         #### RT layer: takes as input parameter the dispatch decisions, optimizes the real-time dispatch
-
+        tolerance = .01
+        
         p_gen = cp.Parameter(grid['n_unit'])
         w_actual = cp.Parameter(1)
                 
@@ -800,9 +802,9 @@ class LinearPoolSchedLayer(nn.Module):
         l_shed = cp.Variable((1))
         cost_RT = cp.Variable(1)
                 
-        RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]        
-        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen, r_up <= grid['R_u_max'].reshape(-1)]            
-        RT_sched_constraints += [r_down <= p_gen, r_down <= grid['R_d_max'].reshape(-1)]            
+        RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0 - tolerance, r_up >= 0 - tolerance]        
+        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen + tolerance, r_up <= grid['R_u_max'].reshape(-1) + tolerance]            
+        RT_sched_constraints += [r_down <= p_gen+ tolerance, r_down <= grid['R_d_max'].reshape(-1) + tolerance]            
         #RT_sched_constraints += [g_shed <= p_gen.sum()]            
         
         # balancing
@@ -879,15 +881,21 @@ class LinearPoolSchedLayer(nn.Module):
                 decisions_hat = output_hat[1][0]
                 
                 p_hat = decisions_hat[0]
+                cost_DA_hat = decisions_hat[-1]
+
+                # total loss
+                #print(cost_DA_hat.mean())
+                #print(p_hat)
                 
                 # solve RT layer, find redispatch cost
-                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':50000})                
+                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':100_000})                
 
                 # CRPS of combination
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
 
-                # total loss
-                loss = rt_output[-1].mean() + self.gamma*crps_i
+                
+                loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
+                #loss = cost_DA_hat.mean()
                     
                 # backward pass
                 loss.backward()
