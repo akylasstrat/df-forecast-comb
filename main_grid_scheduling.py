@@ -360,9 +360,12 @@ def load_grid_data(case_name, pglib_path):
     grid = grid_dict(pglib_path + case_name)
     
     print(case_name_prefix)
+    
+    np.random.seed(1234)
 
-    grid['C_up'] = 1.8*grid['Cost']
-    grid['C_down'] = 0.9*grid['Cost']
+    
+    grid['C_up'] = (1 + np.random.uniform(0.5, 0.9, len(grid['Cost'])))*grid['Cost']
+    grid['C_down'] = (1 - np.random.uniform(0.1, 0.3, len(grid['Cost'])))*grid['Cost']
     grid['w_capacity'] = w_cap_dict[case_name]
     grid['w_bus'] = w_bus_dict[case_name]
     
@@ -425,7 +428,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/astratig/pglib-opf/'
+pglib_path =  'C:/Users/akyla/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -444,7 +447,7 @@ for i, case in enumerate(Cases):
     w_bus_dict[case] = w_bus[i]
     w_cap_dict[case] = w_cap[i]
 
-target_case = Cases[3]
+target_case = Cases[0]
 grid = load_grid_data(target_case, pglib_path)
 
 #%% Data pre-processing
@@ -796,6 +799,8 @@ for tup in tuple_list[row_counter:]:
     #%%
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
+    
+    learning_rate = 5e-3
     
     for gamma in config['gamma_list']:
         
