@@ -732,7 +732,7 @@ class LinearPoolSchedLayer(nn.Module):
         if self.clearing_type == 'stoch':
             ###### DA variables    
             p_DA = cp.Variable((grid['n_unit']))
-            slack_DA = cp.Variable(1)
+            #slack_DA = cp.Variable(1)
             cost_DA = cp.Variable(1)
     
             ###### RT variables
@@ -743,14 +743,12 @@ class LinearPoolSchedLayer(nn.Module):
             l_shed = cp.Variable((1, n_locations))
             cost_RT = cp.Variable(n_locations)
             
-            DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1)] \
-                             #+ [p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) >= grid['Pd'].sum()]
-    
-                             #+ [cost_DA == grid['Cost']@p_DA]\
-    
-                                #+ [slack_DA >= 0]\
-            
-            
+            ## DA constraints
+            DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), 
+                              cost_DA == grid['Cost']@p_DA]            
+                              #p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) == grid['Pd'].sum(), 
+
+            ## RT constraints            
             RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
             
             for s in range(n_locations):
@@ -765,11 +763,11 @@ class LinearPoolSchedLayer(nn.Module):
                                    +grid['VOLL']*(g_shed[:,s].sum() + l_shed[:,s].sum())]            
             
             #l2_regularization = (prob_weights@sq_error)
-            objective_funct = cp.Minimize( grid['Cost']@p_DA +  prob_weights@cost_RT ) 
+            objective_funct = cp.Minimize( cost_DA +  prob_weights@cost_RT ) 
             sched_problem = cp.Problem(objective_funct, DA_constraints + RT_constraints)
              
             self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
-                                               variables = [p_DA, r_up, r_down, g_shed, l_shed, cost_RT] )
+                                               variables = [p_DA, r_up, r_down, g_shed, l_shed, cost_RT, cost_DA] )
         
         elif self.clearing_type == 'det':
             ###### DA variables    
@@ -778,7 +776,7 @@ class LinearPoolSchedLayer(nn.Module):
             cost_DA = cp.Variable(1)
                     
             DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), slack_DA >= 0, 
-                              p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() >= grid['Pd'].sum(), 
+                              p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() == grid['Pd'].sum(), 
                               cost_DA == grid['Cost']@p_DA + grid['VOLL']*slack_DA.sum()]
 
             objective_funct = cp.Minimize( cost_DA ) 
@@ -802,14 +800,14 @@ class LinearPoolSchedLayer(nn.Module):
         l_shed = cp.Variable((1))
         cost_RT = cp.Variable(1)
                 
-        RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0 - tolerance, r_up >= 0 - tolerance]        
-        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen + tolerance, r_up <= grid['R_u_max'].reshape(-1) + tolerance]            
+        RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]        
+        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen, r_up <= grid['R_u_max'].reshape(-1)]            
         RT_sched_constraints += [r_down <= p_gen+ tolerance, r_down <= grid['R_d_max'].reshape(-1) + tolerance]            
         #RT_sched_constraints += [g_shed <= p_gen.sum()]            
         
         # balancing
         RT_sched_constraints += [p_gen.sum() + r_up.sum() - r_down.sum() -g_shed.sum() + grid['w_capacity']*w_actual + l_shed.sum() == grid['Pd'].sum()]
-        RT_sched_constraints += [cost_RT == (grid['C_up']-grid['Cost'])@r_up + (grid['Cost'] - grid['C_down'])@r_down +grid['VOLL']*(g_shed.sum() + l_shed.sum()) ]
+        RT_sched_constraints += [cost_RT == (grid['C_up'])@r_up + ( - grid['C_down'])@r_down +grid['VOLL']*(g_shed.sum() + l_shed.sum()) ]
         
         objective_funct = cp.Minimize( cost_RT ) 
         rt_problem = cp.Problem(objective_funct, RT_sched_constraints)
@@ -895,6 +893,8 @@ class LinearPoolSchedLayer(nn.Module):
 
                 
                 loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
+                #loss = rt_output[-1].mean() + self.gamma*crps_i
+                
                 #loss = cost_DA_hat.mean()
                     
                 # backward pass

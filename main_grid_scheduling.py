@@ -5,6 +5,12 @@ Grid scheduling example
 @author: astratig
 """
 
+#node_inj = m.addMVar((grid['n_nodes'], n_samples), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+#m.addConstrs(node_inj[:,i] == (node_G@p_G_i[:,i] + node_L@slack_i[:,i] -node_L@curt_i[:,i] 
+#                               - node_L@node_load_i[:,i]) for i in range(n_samples))    
+#m.addConstrs(PTDF@node_inj[:,i] <= grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
+#m.addConstrs(PTDF@node_inj[:,i] >= -grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
+
 import pandas as pd
 import numpy as np
 import itertools
@@ -166,7 +172,7 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     
     # Expected decision cost for DA + RT scheduling
     rt_sched.addConstr( da_cost == grid['Cost']@p_DA)
-    rt_sched.addConstr( rt_cost == (grid['C_up']-grid['Cost'])@r_up + (grid['Cost']-grid['C_down'])@r_down + grid['VOLL']*L_shed.sum() + grid['VOLL']*G_shed.sum())
+    rt_sched.addConstr( rt_cost == (grid['C_up'])@r_up + (-grid['C_down'])@r_down + grid['VOLL']*L_shed.sum() + grid['VOLL']*G_shed.sum())
 
     rt_sched.setObjective(rt_cost)
     
@@ -210,7 +216,7 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     # DA Variables
     p_DA = stoch_market.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'p_G')
     slack_DA = stoch_market.addMVar((grid['n_loads']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'slack')
-    exp_w = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    #exp_w = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
     # cost variables
     da_cost = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
     rt_cost = stoch_market.addMVar((n_scen), vtype = gp.GRB.CONTINUOUS, lb =  -gp.GRB.INFINITY)
@@ -236,7 +242,6 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
         
     # DA balancing constraint
     #stoch_market.addConstr( p_DA.sum() + exp_w.sum() + slack_DA.sum() == grid['Pd'].sum())
-
     # RT balancing constraint
     #stoch_market.addConstrs( p_DA.sum() + exp_w.sum() + slack_DA.sum() == grid['Pd'].sum() for s in range(n_scen))
     
@@ -246,7 +251,7 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
         
 
     # Expected decision cost for DA + RT scheduling
-    stoch_market.addConstr( da_cost == grid['Cost']@p_DA + grid['VOLL']*slack_DA.sum())
+    stoch_market.addConstr( da_cost == grid['Cost']@p_DA)
     stoch_market.addConstrs( rt_cost[s] == (grid['C_up'])@r_up[:,s] + (-grid['C_down'])@r_down[:,s] + grid['VOLL']*L_shed[:,s].sum() + grid['VOLL']*G_shed[:,s].sum()
                             for s in range(n_scen))
 
@@ -264,13 +269,12 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     for row in range(len(weights)):
         if row%1000 == 0: print(row)
         # expected renewable production
-        c1 = stoch_market.addConstr( exp_w == target_scen@weights[row])
+        #c1 = stoch_market.addConstr( exp_w == target_scen@weights[row])
         c2 = stoch_market.addConstr( t_aux >= rt_cost@weights[row])
     
         stoch_market.optimize()
         
-        for constr in [c1,c2]: stoch_market.remove(constr)        
-        stoch_market.remove(c1)
+        for constr in [c2]: stoch_market.remove(constr)        
         
         DA_prescriptions[row] = p_DA.X
         
@@ -364,8 +368,12 @@ def load_grid_data(case_name, pglib_path):
     np.random.seed(1234)
 
     
-    grid['C_up'] = (1 + np.random.uniform(0.5, 0.9, len(grid['Cost'])))*grid['Cost']
-    grid['C_down'] = (1 - np.random.uniform(0.1, 0.3, len(grid['Cost'])))*grid['Cost']
+    #grid['C_up'] = (1 + np.random.uniform(0.5, 0.9, len(grid['Cost'])))*grid['Cost']
+    #grid['C_down'] = (1 - np.random.uniform(0.1, 0.3, len(grid['Cost'])))*grid['Cost']
+    
+    grid['C_up'] = 1.8*grid['Cost']
+    grid['C_down'] = 0.9*grid['Cost']
+
     grid['w_capacity'] = w_cap_dict[case_name]
     grid['w_bus'] = w_bus_dict[case_name]
     
@@ -409,8 +417,8 @@ def params():
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
-    params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2]
+    params['gamma_list'] = [0, 1]
+    params['target_zone'] = [1]
     
     
     params['crit_quant'] = np.arange(0.1, 0.4, 0.1).round(2)
@@ -428,7 +436,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -800,8 +808,6 @@ for tup in tuple_list[row_counter:]:
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
     
-    learning_rate = 5e-3
-    
     for gamma in config['gamma_list']:
         
         lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
@@ -816,12 +822,12 @@ for tup in tuple_list[row_counter:]:
         else:
             lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
             
-        if config['save']:
-            #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
-            lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
-            lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
+    if config['save']:
+        #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+        lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+        lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
 
-#%%
+
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
@@ -906,11 +912,11 @@ for tup in tuple_list[row_counter:]:
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
             
-    #%%
-        lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
-    lambda_static_dict = lamda_static_df.to_dict('list')
+    
+    #lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
+    #lambda_static_dict = lamda_static_df.to_dict('list')
     adaptive_models_dict = {}
-    #%%
+    
     #% Evaluate performance for all models
     #%
     static_models = list(lambda_static_dict) 
