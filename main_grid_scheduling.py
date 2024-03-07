@@ -417,7 +417,7 @@ def params():
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
-    params['gamma_list'] = [0, 1]
+    params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1]
     
     
@@ -436,7 +436,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/astratig/pglib-opf/'
+pglib_path =  'C:/Users/akyla/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -827,7 +827,7 @@ for tup in tuple_list[row_counter:]:
         lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
 
-
+    #%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
