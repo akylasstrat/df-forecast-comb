@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Grid scheduling example
+Wind production/ Grid scheduling example
 
 @author: astratig
 """
@@ -407,18 +407,20 @@ def params():
     ''' Set up the experiment parameters'''
 
     params = {}
-
+    
     params['start_date'] = '2012-01-01'
     params['split_date_prob'] = '2013-01-01' # Defines train/test split
-    params['split_date_comb'] = '2014-01-01' # Defines train/test split
-    params['end_date'] = '2014-07-01'
+    params['split_date_comb'] = '2013-07-01' # Defines train/test split
+    params['end_date'] = '2014-01-01'
     
     params['save'] = False # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
+
     params['target_zone'] = [1]
+    params['dataset'] = 'wind' # do not change
     
     
     params['crit_quant'] = np.arange(0.1, 0.4, 0.1).round(2)
@@ -438,9 +440,6 @@ results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
 pglib_path =  'C:/Users/akyla/pglib-opf/'
 
-
-aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
-
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
          'pglib_opf_case24_ieee_rts.m', 'pglib_opf_case39_epri.m', 'pglib_opf_case73_ieee_rts.m']
@@ -457,92 +456,53 @@ for i, case in enumerate(Cases):
 
 target_case = Cases[0]
 grid = load_grid_data(target_case, pglib_path)
+grid['Pd'][0] = grid['Pd'][0]  + 100
+#%% Load wind data and pre-processing
+
+aggr_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, header = [0,1])
+
 
 #%% Data pre-processing
+dataset = config['dataset']
 zone_target = config['target_zone']
-aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
 target_problem = config['problem']
 risk_aversion = config['risk_aversion']
 
-filename_prefix = f'Z{zone_target[0]}_{target_case}_'
-        
-del aggr_df['ZONEID']
-
-aggr_df['Hour'] = aggr_df.index.hour
-aggr_df['Month'] = aggr_df.index.month
-
-weather_dict = {'VAR78':'tclw', 'VAR79': 'tciw', 'VAR134':'SP', 'VAR157':'rh', 
-                'VAR164':'tcc', 'VAR165':'10u', 'VAR166':'10v', 'VAR167':'2T', 
-                'VAR169':'SSRD', 'VAR175':'STRD', 'VAR178':'TSR', 'VAR228':'TP'}
-
-aggr_df = aggr_df.rename(columns = weather_dict)
-
-#solar_df['diurnal_1'] = np.sin(2*np.pi*(solar_df.index.hour+1)/24)
-#solar_df['diurnal_2'] = np.cos(2*np.pi*(solar_df.index.hour+1)/24)
-#solar_df['diurnal_3'] = np.sin(4*np.pi*(solar_df.index.hour+1)/24)
-#solar_df['diurnal_4'] = np.cos(4*np.pi*(solar_df.index.hour+1)/24)
-#%%
-for col in ['SSRD', 'STRD', 'TSR', 'TP']:
-    if col != 'TP':
-        aggr_df[col] = aggr_df[col].diff()/3600
-        aggr_df[col][aggr_df[col]<0] = np.nan
-    else:
-        aggr_df[col] = aggr_df[col].diff()
-        aggr_df[col][aggr_df[col]<0] = np.nan
-        
-aggr_df = aggr_df.interpolate()
-aggr_df = aggr_df.dropna()
-
-
-#target_scaler = MinMaxScaler()
-#pred_scaler = MinMaxScaler()
-
-#%%
-
-aggr_df['Hour'] = aggr_df.index.hour
-aggr_df['Month'] = aggr_df.index.month
-
-# remove hours with zero production (timestamp is UTC/ plants are in Australia)
-bool_ind = aggr_df.groupby('Hour').mean()['POWER'] == 0
-zero_hour = bool_ind.index.values[bool_ind.values]
-aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
-#%%
-
-#!!!! Add randomization based on the iteration counter here
-critical_fractile = config['crit_quant'][0]
+filename_prefix = f'Z{zone_target[0]}_{target_case}_{dataset}'
 
 tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'])]
+
+# keep only relevant data
+
+zone_df = aggr_df.copy()['Z1']
 
 #%%
 
 step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
 nlocations = len(y_supp)
-predictor_names = list(aggr_df.columns)
-predictor_names.remove('POWER')
-
-weather_variables = ['tclw','tciw','SP','rh','tcc','10u','10v','2T','SSRD','STRD','TSR','TP']
-calendar_variables = ['Hour', 'Month']
-all_variables = weather_variables + calendar_variables
 
 #%%
 
 feat_scaler = MinMaxScaler()
-feat_scaler.fit(aggr_df[all_variables][config['start_date']:config['split_date_comb']])
-aggr_df[all_variables] = feat_scaler.transform(aggr_df[all_variables])
 
 ### Create train/test sets for all series
-trainY = aggr_df['POWER'][config['start_date']:config['split_date_prob']].round(2)
-comb_trainY = aggr_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
-testY = aggr_df['POWER'][config['split_date_comb']:].round(2)
+trainY = zone_df['POWER'][config['start_date']:config['split_date_prob']].round(2)
+comb_trainY = zone_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
+testY = zone_df['POWER'][config['split_date_comb']:].round(2)
 
-trainX_weather = aggr_df[weather_variables][config['start_date']:config['split_date_prob']]
-comb_trainX_weather = aggr_df[weather_variables][config['split_date_prob']:config['split_date_comb']]
-testX_weather = aggr_df[weather_variables][config['split_date_comb']:]
+#%%
+trainX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
 
-trainX_date = aggr_df[calendar_variables][config['start_date']:config['split_date_prob']]
-comb_trainX_date = aggr_df[calendar_variables][config['split_date_prob']:config['split_date_comb']]
-testX_date = aggr_df[calendar_variables][config['split_date_comb']:]
+trainX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+
+trainX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['split_date_comb']:]
 
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
@@ -556,15 +516,6 @@ learning_rate = nn_hparam['learning_rate']
 apply_softmax = nn_hparam['apply_softmax']
 row_counter = 0
 
-#try:
-#    Decision_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv', index_col = 0)
-#    QS_df = pd.read_csv(f'{results_path}\\{filename_prefix}_QS.csv', index_col = 0)
-#    mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
-#except:
-#    Decision_cost = pd.DataFrame()
-#    QS_df = pd.DataFrame()
-#    mean_QS = pd.DataFrame()
-
 RT_cost = pd.DataFrame()
 DA_cost = pd.DataFrame()
 
@@ -577,10 +528,7 @@ for tup in tuple_list[row_counter:]:
 
     target_zone = tup[0]    
     risk_aversion = tup[1]
-    
-    # !!! Add case here
-    print(f'Quantile:{critical_fractile}, zone:{target_zone}')
-    
+        
     np.random.seed(1234)
 
     if row_counter == 0:        
@@ -596,78 +544,46 @@ for tup in tuple_list[row_counter:]:
         
         # cross-validation for hyperparamter tuning and model training
         knn_model_cv = GridSearchCV(KNeighborsRegressor(), parameters)
-        knn_model_cv.fit(trainX_weather, trainY.values)    
+        knn_model_cv.fit(trainX_v3, trainY.values)    
         best_n_neighbors = knn_model_cv.best_estimator_.get_params()['n_neighbors']
         # find the weights for training/ comb training/ test set
             
-        train_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(comb_trainX_weather).toarray()*(1/best_n_neighbors)
-        test_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(testX_weather).toarray()*(1/best_n_neighbors)
-            
-        # cross-validation for hyperparamter tuning and model training
-        knn_model_cv = GridSearchCV(KNeighborsRegressor(), parameters)
-        knn_model_cv.fit(trainX_weather, trainY.values)    
-        best_n_neighbors = knn_model_cv.best_estimator_.get_params()['n_neighbors']
-    
+        train_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(comb_trainX_v3).toarray()*(1/best_n_neighbors)
+        test_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(testX_v3).toarray()*(1/best_n_neighbors)
+                
         probabilistic_models['knn'] = knn_model_cv.best_estimator_
 
         # CART 1: weather predictors
         cart_parameters = {'max_depth':[5, 10, 20, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
         cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
         
-        cart_model_cv.fit(trainX_weather, trainY.values)    
+        cart_model_cv.fit(trainX_v3, trainY.values)    
             
         cart_model = cart_model_cv.best_estimator_
         probabilistic_models['cart'] = cart_model_cv.best_estimator_
         
-        train_w_dict['cart'] = cart_find_weights(trainX_weather, comb_trainX_weather, cart_model)
-        test_w_dict['cart'] = cart_find_weights(trainX_weather, testX_weather, cart_model)
-        
-        #%%
-        # CART 2: date predictors
-        
-        cart_parameters = {'max_depth':[5, 10, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
-        cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
-        
-        trainX_cart2 = trainX_date.copy()
-        comb_trainX_cart2 = comb_trainX_date.copy()
-        testX_cart2 = testX_date.copy()
-        
-        trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['start_date']:config['split_date_prob']]
-        comb_trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
-        testX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_comb']:]
+        train_w_dict['cart'] = cart_find_weights(trainX_v3, comb_trainX_v3, cart_model)
+        test_w_dict['cart'] = cart_find_weights(trainX_v3, testX_v3, cart_model)
                 
-        cart_model_cv.fit(trainX_cart2, trainY.values)    
-            
-        cart_model = cart_model_cv.best_estimator_
-        
-        probabilistic_models['cart_date'] = cart_model_cv.best_estimator_
-        
-        train_w_dict['cart_date'] = cart_find_weights(trainX_cart2, comb_trainX_cart2, cart_model)
-        test_w_dict['cart_date'] = cart_find_weights(trainX_cart2, testX_cart2, cart_model)
-        
         #%%
         # Random Forest
     
         rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 
-                      'max_features':[1, 2, 4, len(trainX_weather.columns)]}
+                      'max_features':[1, 2, 4, len(trainX_v3.columns)]}
     
         rf_model_cv = GridSearchCV(ExtraTreesRegressor(), rf_parameters)
-        rf_model_cv.fit(trainX_weather, trainY.values)    
+        rf_model_cv.fit(trainX_v3, trainY.values)    
             
         rf_model = rf_model_cv.best_estimator_
         probabilistic_models['rf'] = rf_model_cv.best_estimator_
     
-        knn_point_pred = knn_model_cv.best_estimator_.predict(testX_weather)
-        rf_point_pred = rf_model.predict(testX_weather)
-        cart_point_pred = cart_model.predict(testX_cart2)
+        rf_point_pred = rf_model.predict(testX_v3)
+        knn_point_pred = knn_model_cv.best_estimator_.predict(testX_v3)
+        cart_point_pred = cart_model.predict(testX_v3)
 
-        train_w_dict['rf'] = forest_find_weights(trainX_weather, comb_trainX_weather, rf_model)
-        test_w_dict['rf'] = forest_find_weights(trainX_weather, testX_weather, rf_model)
+        train_w_dict['rf'] = forest_find_weights(trainX_v3, comb_trainX_v3, rf_model)
+        test_w_dict['rf'] = forest_find_weights(trainX_v3, testX_v3, rf_model)
         #%%
-        #
-        ## Climatology forecast
-        #train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
-        #test_w_dict['clim'] = np.ones((testY.shape[0], trainY.shape[0]))*(1/len(trainY))
         
         # Translate weighted observations to discrete PDFs
         train_p_list = []
@@ -696,7 +612,7 @@ for tup in tuple_list[row_counter:]:
             CRPS = np.square(temp_CDF - H_i).mean()
     
             print(f'{m}:{CRPS}')
-        #%%
+        
         # estimate QS
         print('QS')
         target_quant = np.arange(.01, 1, .01)
@@ -713,7 +629,7 @@ for tup in tuple_list[row_counter:]:
         plt.xlabel('Quantile')
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         plt.show()
-        #%%
+        
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -740,9 +656,9 @@ for tup in tuple_list[row_counter:]:
     tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
     tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
         
-    tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
-    tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
-    tensor_testX = torch.FloatTensor(testX_date.values)
+    #tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
+    #tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
+    #tensor_testX = torch.FloatTensor(testX_date.values)
     
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
     
@@ -779,7 +695,6 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['Insample'] = lambda_tuned_inv    
     #lambda_static_dict['SalvaBench'] = lambda_
     #%%
-    
     #% CRPS learning
     
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
@@ -811,7 +726,8 @@ for tup in tuple_list[row_counter:]:
     for gamma in config['gamma_list']:
         
         lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'stoch')
+                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'det', 
+                                                 regularization = risk_aversion)
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
@@ -838,83 +754,6 @@ for tup in tuple_list[row_counter:]:
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
     # iv) create one for CRPS only (gamma == +inf)
     
-    train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
-    valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size)
-            
-    #tensor_trainZopt = torch.FloatTensor(trainZopt[:-valid_obs])
-    #tensor_validZopt = torch.FloatTensor(trainZopt[-valid_obs:])
-    #tensor_testZopt = torch.FloatTensor(testZopt)
-    
-    adaptive_models_dict = {}
-    
-    adapt_models = False
-    #!!!! Update these
-    if adapt_models:
-        ### CRPS/ Linear Regression
-        lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
-                                                          support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(lr_lpool_crps_model.parameters(), lr = learning_rate)        
-        lr_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['CRPS-LR'] = lr_lpool_crps_model
-    
-        ### CRPS/ MLP learner
-        
-        mlp_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(mlp_lpool_crps_model.parameters(), lr = learning_rate)        
-        mlp_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
-    
-        ### Decision Combination/ LR
-        train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
-        valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size)
-    
-    
-        lr_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(lr_lpool_decision_model.parameters(), lr = 1e-3)        
-        lr_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['SalvaBench-LR'] = lr_lpool_decision_model
-    
-        mlp_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], 
-                                                               output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(mlp_lpool_decision_model.parameters(), lr = 1e-3)        
-        mlp_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
-    
-        adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
-        
-        #%
-        for gamma in config['gamma_list']:
-                        
-            lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
-                                                                     output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
-                                                                     risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
-            
-            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 0.5e-2)
-            lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
-            
-            
-            adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
-    
-            mlp_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20,20,20], 
-                                                                     output_size = N_experts, support = torch.FloatTensor(y_supp), 
-                                                                     gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
-            
-            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 0.5e-2)
-            mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
-    
-            adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
-            
-    
-    #lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
-    #lambda_static_dict = lamda_static_df.to_dict('list')
     adaptive_models_dict = {}
     
     #% Evaluate performance for all models

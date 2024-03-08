@@ -726,30 +726,35 @@ class LinearPoolSchedLayer(nn.Module):
         
         n_locations = len(self.support)
         
+
         #### Stochastic scheduling layer        
         prob_weights = cp.Parameter(n_locations)
+        #sqrt_prob_weights = cp.Parameter(n_locations)
+        #error = cp.Variable(n_locations)
+        #y_hat = cp.Variable(1)
 
         if self.clearing_type == 'stoch':
             ###### DA variables    
-            p_DA = cp.Variable((grid['n_unit']))
+            p_DA = cp.Variable((grid['n_unit']), nonneg = True)
             #slack_DA = cp.Variable(1)
-            cost_DA = cp.Variable(1)
+            cost_DA = cp.Variable(1, nonneg = True)
     
             ###### RT variables
-            r_up = cp.Variable((grid['n_unit'], n_locations))
-            r_down = cp.Variable((grid['n_unit'], n_locations))
+            r_up = cp.Variable((grid['n_unit'], n_locations), nonneg = True)
+            r_down = cp.Variable((grid['n_unit'], n_locations), nonneg = True)
     
-            g_shed = cp.Variable((1, n_locations))
-            l_shed = cp.Variable((1, n_locations))
-            cost_RT = cp.Variable(n_locations)
+            g_shed = cp.Variable((1, n_locations), nonneg = True)
+            l_shed = cp.Variable((1, n_locations), nonneg = True)
+            cost_RT = cp.Variable(n_locations, nonneg = True)
             
             ## DA constraints
-            DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), 
+            DA_constraints = [p_DA <= grid['Pmax'].reshape(-1), 
                               cost_DA == grid['Cost']@p_DA]            
                               #p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) == grid['Pd'].sum(), 
 
             ## RT constraints            
-            RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
+            #RT_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]
+            RT_constraints = []
             
             for s in range(n_locations):
                 RT_constraints += [r_up[:,s] <= grid['Pmax'].reshape(-1) - p_DA, r_up[:,s] <= grid['R_u_max'].reshape(-1)]            
@@ -771,38 +776,48 @@ class LinearPoolSchedLayer(nn.Module):
         
         elif self.clearing_type == 'det':
             ###### DA variables    
-            p_DA = cp.Variable((grid['n_unit']))
-            slack_DA = cp.Variable(1)
-            cost_DA = cp.Variable(1)
+            p_DA = cp.Variable((grid['n_unit']), nonneg = True)
+            slack_DA = cp.Variable(1, nonneg = True)
+            cost_DA = cp.Variable(1, nonneg = True)
                     
-            DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), slack_DA >= 0, 
+            #DA_constraints = [p_DA >= 0, p_DA <= grid['Pmax'].reshape(-1), slack_DA >= 0, 
+            #                  p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() == grid['Pd'].sum(), 
+            #                  cost_DA == grid['Cost']@p_DA + grid['VOLL']*slack_DA.sum()]
+
+            DA_constraints = [p_DA <= grid['Pmax'].reshape(-1), 
                               p_DA.sum() + grid['w_capacity']*(prob_weights@self.support) + slack_DA.sum() == grid['Pd'].sum(), 
                               cost_DA == grid['Cost']@p_DA + grid['VOLL']*slack_DA.sum()]
-
+            
+            
+            #Reg_constraints = [error == self.support - y_hat, y_hat == prob_weights@self.support]            
+            #w_error = cp.multiply(sqrt_prob_weights, error)
+            #l2_regularization = cp.sum_squares(w_error)
+    
             objective_funct = cp.Minimize( cost_DA ) 
-            sched_problem = cp.Problem(objective_funct, DA_constraints)
+            sched_problem = cp.Problem(objective_funct, DA_constraints )
              
             self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
                                                variables = [p_DA, slack_DA, cost_DA])
         
 
         #### RT layer: takes as input parameter the dispatch decisions, optimizes the real-time dispatch
-        tolerance = .01
+        tolerance = .1
         
         p_gen = cp.Parameter(grid['n_unit'])
         w_actual = cp.Parameter(1)
                 
         ###### RT variables
-        r_up = cp.Variable((grid['n_unit']))
-        r_down = cp.Variable((grid['n_unit']))
+        r_up = cp.Variable((grid['n_unit']), nonneg = True)
+        r_down = cp.Variable((grid['n_unit']), nonneg = True)
         
-        g_shed = cp.Variable((1))
-        l_shed = cp.Variable((1))
-        cost_RT = cp.Variable(1)
-                
-        RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]        
-        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen, r_up <= grid['R_u_max'].reshape(-1)]            
-        RT_sched_constraints += [r_down <= p_gen+ tolerance, r_down <= grid['R_d_max'].reshape(-1) + tolerance]            
+        g_shed = cp.Variable((1), nonneg = True)
+        l_shed = cp.Variable((1), nonneg = True)
+        cost_RT = cp.Variable(1, nonneg = True)
+        
+        RT_sched_constraints = []
+        #RT_sched_constraints = [l_shed >= 0, g_shed >= 0, r_down >= 0, r_up >= 0]        
+        RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen + tolerance, r_up <= grid['R_u_max'].reshape(-1) + tolerance]            
+        RT_sched_constraints += [r_down <= p_gen + tolerance, r_down <= grid['R_d_max'].reshape(-1) + tolerance]            
         #RT_sched_constraints += [g_shed <= p_gen.sum()]            
         
         # balancing
@@ -838,8 +853,8 @@ class LinearPoolSchedLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':50000})
-            
+        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':20_000})
+
         return combined_pdf, cvxpy_output
     
     def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
@@ -858,6 +873,9 @@ class LinearPoolSchedLayer(nn.Module):
         early_stopping_counter = 0
         best_weights = copy.deepcopy(self.state_dict())
 
+        Pmax_tensor = torch.FloatTensor(self.grid['Pmax'].reshape(-1))
+        Pmin_tensor = torch.FloatTensor(self.grid['Pmin'].reshape(-1))
+        
         for epoch in range(epochs):
             # activate train functionality
             self.train()
@@ -879,6 +897,11 @@ class LinearPoolSchedLayer(nn.Module):
                 decisions_hat = output_hat[1][0]
                 
                 p_hat = decisions_hat[0]
+                #y_hat = decisions_hat[1]
+                
+                # Project p_hat to feasible set
+                p_hat_proj = torch.minimum(p_hat, Pmax_tensor)
+                
                 cost_DA_hat = decisions_hat[-1]
 
                 # total loss
@@ -886,11 +909,16 @@ class LinearPoolSchedLayer(nn.Module):
                 #print(p_hat)
                 
                 # solve RT layer, find redispatch cost
-                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':100_000})                
+                
+                rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':100_000})                
 
                 # CRPS of combination
                 crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
 
+                # L2 regularization
+                #error_hat = (y_batch.reshape(-1,1) - y_hat)
+                #print(error_hat.shape)
+                #sql2_loss = self.grid['w_capacity']*torch.square(error_hat).sum()
                 
                 loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
                 #loss = rt_output[-1].mean() + self.gamma*crps_i
