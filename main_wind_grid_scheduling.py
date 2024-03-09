@@ -370,9 +370,22 @@ def load_grid_data(case_name, pglib_path):
     
     #grid['C_up'] = (1 + np.random.uniform(0.5, 0.9, len(grid['Cost'])))*grid['Cost']
     #grid['C_down'] = (1 - np.random.uniform(0.1, 0.3, len(grid['Cost'])))*grid['Cost']
-    
-    grid['C_up'] = 1.8*grid['Cost']
+
+    grid['C_up'] = 5*grid['Cost']
     grid['C_down'] = 0.9*grid['Cost']
+
+    R_u_max = np.ones(grid['n_unit']) 
+    R_u_max[grid['Cost'] < 10] = 0.1*grid['Pmax'][grid['Cost'] < 10]
+    R_u_max[ (grid['Cost'] >= 10)*(grid['Cost'] < 20) ] = 0.3*grid['Pmax'][(grid['Cost'] >= 10)*(grid['Cost'] < 20)]
+    R_u_max[ grid['Cost'] >= 20 ] = 1*grid['Pmax'][grid['Cost'] >= 20]
+        
+    #grid['C_up'] = 1.8*grid['Cost']
+    #grid['C_down'] = 0.9*grid['Cost']
+
+    #R_u_max = np.ones(grid['n_unit'])
+    #R_u_max[grid['Cost'] < 10] = (grid['Pmax'][grid['Cost'] < 10]/5).round(2)
+    #R_u_max[ (grid['Cost'] >= 10)*(grid['Cost'] < 20) ] = ( grid['Pmax'][(grid['Cost'] >= 10)*(grid['Cost'] < 20)] /2 ).round(2)
+    #R_u_max[ grid['Cost'] >= 20 ] = grid['Pmax'][grid['Cost'] >= 20]
 
     grid['w_capacity'] = w_cap_dict[case_name]
     grid['w_bus'] = w_bus_dict[case_name]
@@ -380,12 +393,6 @@ def load_grid_data(case_name, pglib_path):
     # wind incidence matrix
     grid['node_Wind'] = np.zeros((grid['n_nodes'], 1))
     grid['node_Wind'][grid['w_bus']] = 1
-    
-    
-    R_u_max = np.ones(grid['n_unit'])
-    R_u_max[grid['Cost'] < 10] = (grid['Pmax'][grid['Cost'] < 10]/5).round(2)
-    R_u_max[ (grid['Cost'] >= 10)*(grid['Cost'] < 20) ] = ( grid['Pmax'][(grid['Cost'] >= 10)*(grid['Cost'] < 20)] /2 ).round(2)
-    R_u_max[ grid['Cost'] >= 20 ] = grid['Pmax'][grid['Cost'] >= 20]
     
     R_d_max = R_u_max
     grid['VOLL'] = 200
@@ -456,7 +463,9 @@ for i, case in enumerate(Cases):
 
 target_case = Cases[0]
 grid = load_grid_data(target_case, pglib_path)
-grid['Pd'][0] = grid['Pd'][0]  + 100
+#grid['Pd'][0] = grid['Pd'][0]  + 100
+grid['Pd'] = 1.5*grid['Pd']
+
 #%% Load wind data and pre-processing
 
 aggr_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, header = [0,1])
@@ -466,6 +475,7 @@ aggr_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, h
 dataset = config['dataset']
 zone_target = config['target_zone']
 target_problem = config['problem']
+expert_zone = ['Z7', 'Z8', 'Z9']
 risk_aversion = config['risk_aversion']
 
 filename_prefix = f'Z{zone_target[0]}_{target_case}_{dataset}'
@@ -492,17 +502,32 @@ comb_trainY = zone_df['POWER'][config['split_date_prob']:config['split_date_comb
 testY = zone_df['POWER'][config['split_date_comb']:].round(2)
 
 #%%
-trainX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
-comb_trainX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
-testX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
+#trainX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
+#comb_trainX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
+#testX_v1 = zone_df[['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
 
-trainX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
-comb_trainX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
-testX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+#trainX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+#comb_trainX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+#testX_v2 = zone_df[['wspeed100', 'wdir100_rad']][config['split_date_comb']:]
 
-trainX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
-comb_trainX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
-testX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+#trainX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+#comb_trainX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+#testX_v3 = zone_df[['wspeed10', 'wdir10_rad','wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+
+expert_zones = ['Z2', 'Z3', 'Z4']
+
+trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
+
+trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
+
+trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+
 
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
@@ -544,12 +569,12 @@ for tup in tuple_list[row_counter:]:
         
         # cross-validation for hyperparamter tuning and model training
         knn_model_cv = GridSearchCV(KNeighborsRegressor(), parameters)
-        knn_model_cv.fit(trainX_v3, trainY.values)    
+        knn_model_cv.fit(trainX_v1, trainY.values)    
         best_n_neighbors = knn_model_cv.best_estimator_.get_params()['n_neighbors']
         # find the weights for training/ comb training/ test set
             
-        train_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(comb_trainX_v3).toarray()*(1/best_n_neighbors)
-        test_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(testX_v3).toarray()*(1/best_n_neighbors)
+        train_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(comb_trainX_v1).toarray()*(1/best_n_neighbors)
+        test_w_dict['knn'] = knn_model_cv.best_estimator_.kneighbors_graph(testX_v1).toarray()*(1/best_n_neighbors)
                 
         probabilistic_models['knn'] = knn_model_cv.best_estimator_
 
@@ -557,32 +582,38 @@ for tup in tuple_list[row_counter:]:
         cart_parameters = {'max_depth':[5, 10, 20, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
         cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
         
-        cart_model_cv.fit(trainX_v3, trainY.values)    
+        cart_model_cv.fit(trainX_v2, trainY.values)    
             
         cart_model = cart_model_cv.best_estimator_
         probabilistic_models['cart'] = cart_model_cv.best_estimator_
         
-        train_w_dict['cart'] = cart_find_weights(trainX_v3, comb_trainX_v3, cart_model)
-        test_w_dict['cart'] = cart_find_weights(trainX_v3, testX_v3, cart_model)
+        train_w_dict['cart'] = cart_find_weights(trainX_v2, comb_trainX_v2, cart_model)
+        test_w_dict['cart'] = cart_find_weights(trainX_v1, testX_v2, cart_model)
                 
         #%%
         # Random Forest
     
-        rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 
-                      'max_features':[1, 2, 4, len(trainX_v3.columns)]}
+        '''
+        rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[50], 
+                      'max_features':[1, 2, len(trainX_v3.columns)]}
     
         rf_model_cv = GridSearchCV(ExtraTreesRegressor(), rf_parameters)
         rf_model_cv.fit(trainX_v3, trainY.values)    
             
         rf_model = rf_model_cv.best_estimator_
-        probabilistic_models['rf'] = rf_model_cv.best_estimator_
-    
-        rf_point_pred = rf_model.predict(testX_v3)
-        knn_point_pred = knn_model_cv.best_estimator_.predict(testX_v3)
-        cart_point_pred = cart_model.predict(testX_v3)
+        '''
+        
+        rf_model = ExtraTreesRegressor(min_samples_leaf = 10, max_features = 2).fit(trainX_v3, trainY.values)
+        
+        probabilistic_models['rf'] = rf_model
 
         train_w_dict['rf'] = forest_find_weights(trainX_v3, comb_trainX_v3, rf_model)
         test_w_dict['rf'] = forest_find_weights(trainX_v3, testX_v3, rf_model)
+    
+        rf_point_pred = rf_model.predict(testX_v3)
+        knn_point_pred = knn_model_cv.best_estimator_.predict(testX_v1)
+        cart_point_pred = cart_model.predict(testX_v2)
+
         #%%
         
         # Translate weighted observations to discrete PDFs
@@ -629,7 +660,7 @@ for tup in tuple_list[row_counter:]:
         plt.xlabel('Quantile')
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         plt.show()
-        
+        #%%
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -722,11 +753,14 @@ for tup in tuple_list[row_counter:]:
     #%%
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
-    
+    patience = 5
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 500)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 500)
+
     for gamma in config['gamma_list']:
         
-        lpool_sched_model = LinearPoolSchedLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'det', 
+        lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
+                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'stoch', 
                                                  regularization = risk_aversion)
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
@@ -737,19 +771,19 @@ for tup in tuple_list[row_counter:]:
             lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
         else:
             lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
-
+#%%
     if config['save']:
         #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
         lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
 
-    
+#%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
+
     #%%
-        
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
     # iv) create one for CRPS only (gamma == +inf)
@@ -759,6 +793,7 @@ for tup in tuple_list[row_counter:]:
     #% Evaluate performance for all models
     #%
     static_models = list(lambda_static_dict) 
+    
     adaptive_models = list(adaptive_models_dict.keys())
     all_models = static_models + adaptive_models
 

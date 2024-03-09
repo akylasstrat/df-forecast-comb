@@ -133,7 +133,7 @@ plt.ylim()
 rel_crps = qs_cost.copy()
 rel_crps[static_models + adaptive_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models + adaptive_models])/rel_crps['Ave'].values.reshape(-1,1)
 #%%
-farm = [1, 2, 3]
+farm = [2]
 rho = 0.2
 models_plot = static_models
 
