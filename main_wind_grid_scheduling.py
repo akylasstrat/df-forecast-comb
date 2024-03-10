@@ -420,7 +420,7 @@ def params():
     params['split_date_comb'] = '2013-07-01' # Defines train/test split
     params['end_date'] = '2014-01-01'
     
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
@@ -461,7 +461,7 @@ for i, case in enumerate(Cases):
     w_bus_dict[case] = w_bus[i]
     w_cap_dict[case] = w_cap[i]
 
-target_case = Cases[0]
+target_case = Cases[1]
 grid = load_grid_data(target_case, pglib_path)
 #grid['Pd'][0] = grid['Pd'][0]  + 100
 grid['Pd'] = 1.5*grid['Pd']
@@ -765,7 +765,7 @@ for tup in tuple_list[row_counter:]:
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
-        lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
+        lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = 20, 
                                           patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
         if apply_softmax:
             lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))

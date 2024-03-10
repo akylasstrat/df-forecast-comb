@@ -920,9 +920,10 @@ class LinearPoolSchedLayer(nn.Module):
                 loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
  
                 initial_train_loss += loss.item()
-
+                
+        initial_train_loss = initial_train_loss/len(train_loader)
         best_train_loss = initial_train_loss
-        
+        print(f'Initial Estimate: {best_train_loss}')
         for epoch in range(epochs):
             # activate train functionality
             self.train()
