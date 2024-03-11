@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Decision-Focused Forecast Combination/ main script/ second experimental setup: different probabilistic forecasting models for the same location/ solar plants example
 
@@ -23,22 +24,7 @@ from sklearn.tree import DecisionTreeRegressor
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 
-#from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from gurobi_ml import add_predictor_constr
-#from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
-#from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import MinMaxScaler
-
-#from gurobi_ml.sklearn import add_decision_tree_regressor_constr, add_random_forest_regressor_constr
-#project_dir=Path(cd).parent.__str__()   #project_directory
-
-#from EnsemblePrescriptiveTree import *
-#from EnsemblePrescriptiveTree_OOB import *
-#from optimization_functions import *
-
-#from LinearDecisionTree import *
-#from sklearn.neural_network import MLPRegressor
-#from sklearn.tree import DecisionTreeRegressor
 
 from utility_functions import *
 from optimal_transport_functions import *
@@ -749,19 +735,13 @@ def params():
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2]
-    
-    
-    params['crit_quant'] = np.arange(0.1, 0.4, 0.1).round(2)
+        
+    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
-    params['train_static'] = False
+    params['train_static'] = True
     params['train_adaptive'] = True
     
-    # approaches to map data to decisions
-    # LR: linear regression, DecComb: combination of perfect-foresight decisions (both maintain convexity)
-    # DT: decision tree, NN: neural network (both results in MIPs)
-    params['decision_rules'] = ['LR', 'JMBench', 'SalvaBench'] 
-
     return params
 
 #%%
@@ -770,7 +750,7 @@ config = params()
 hyperparam = tree_params()
 nn_hparam = nn_params()
 
-results_path = f'{cd}\\results\\solar_different_prob_models'
+results_path = f'{cd}\\results\\solar_new_results'
 data_path = f'{cd}\\data'
 
 
@@ -825,28 +805,11 @@ aggr_df['Month'] = aggr_df.index.month
 bool_ind = aggr_df.groupby('Hour').mean()['POWER'] == 0
 zero_hour = bool_ind.index.values[bool_ind.values]
 aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
+
+
+tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
+                                               config['risk_aversion'])]
 #%%
-
-#!!!! Add randomization based on the iteration counter here
-critical_fractile = config['crit_quant'][0]
-
-if target_problem == 'newsvendor':
-    config['risk_aversion'] = [0]
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
-                                                   config['risk_aversion'])]
-elif (target_problem == 'reg_trad') or (target_problem == 'pwl'):
-    tuple_list = [tup for tup in itertools.product(zone_target, config['crit_quant'], 
-                                                   config['risk_aversion'])]
-
-#%%
-# Set up some problem parameters
-#all_zones = [f'Z{i}' for i in range(1,11)]
-
-# number of forecasts to combine
-#N_experts = config['N_experts']
-
-# number of observations to train prob. forecasting model
-#N_sample = len(aggr_df)//4
 
 step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
@@ -943,19 +906,6 @@ for tup in tuple_list[row_counter:]:
     
         probabilistic_models['knn'] = knn_model_cv.best_estimator_
 
-        # CART 1: weather predictors
-        cart_parameters = {'max_depth':[5, 10, 20, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
-        cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
-        
-        cart_model_cv.fit(trainX_weather, trainY.values)    
-            
-        cart_model = cart_model_cv.best_estimator_
-        probabilistic_models['cart'] = cart_model_cv.best_estimator_
-        
-        train_w_dict['cart'] = cart_find_weights(trainX_weather, comb_trainX_weather, cart_model)
-        test_w_dict['cart'] = cart_find_weights(trainX_weather, testX_weather, cart_model)
-        
-        #%%
         # CART 2: date predictors
         
         cart_parameters = {'max_depth':[5, 10, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
@@ -965,9 +915,9 @@ for tup in tuple_list[row_counter:]:
         comb_trainX_cart2 = comb_trainX_date.copy()
         testX_cart2 = testX_date.copy()
         
-        trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['start_date']:config['split_date_prob']]
-        comb_trainX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
-        testX_cart2 = aggr_df[calendar_variables+weather_variables][config['split_date_comb']:]
+        trainX_cart2 = aggr_df[calendar_ordinal_variables+weather_variables][config['start_date']:config['split_date_prob']]
+        comb_trainX_cart2 = aggr_df[calendar_ordinal_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
+        testX_cart2 = aggr_df[calendar_ordinal_variables+weather_variables][config['split_date_comb']:]
                 
         cart_model_cv.fit(trainX_cart2, trainY.values)    
             
@@ -978,10 +928,9 @@ for tup in tuple_list[row_counter:]:
         train_w_dict['cart_date'] = cart_find_weights(trainX_cart2, comb_trainX_cart2, cart_model)
         test_w_dict['cart_date'] = cart_find_weights(trainX_cart2, testX_cart2, cart_model)
         
-        #%%
         # Random Forest
     
-        rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 
+        rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[50], 
                       'max_features':[1, 2, 4, len(trainX_weather.columns)]}
     
         rf_model_cv = GridSearchCV(ExtraTreesRegressor(), rf_parameters)
@@ -1155,8 +1104,16 @@ for tup in tuple_list[row_counter:]:
         
     lambda_static_dict['CRPS'] = lambda_crps
     
-    #%
-    ##### Decision-focused combination for different values of gamma        
+    #%%
+    ##### Decision-focused combination for different values of gamma  
+    from torch_layers_functions import *
+      
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512)
+    
+    num_epochs = 100
+    patience = 10
+    
     for gamma in config['gamma_list']:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -1176,8 +1133,13 @@ for tup in tuple_list[row_counter:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
-    #%
-        
+    
+    if config['save']:
+        #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+        lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+        lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static.csv')
+
+    #%%
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
     # iv) create one for CRPS only (gamma == +inf)
@@ -1191,7 +1153,9 @@ for tup in tuple_list[row_counter:]:
     
     adaptive_models_dict = {}
     
-    adapt_models = False
+    adapt_models = config['train_adaptive']
+    num_epochs = 500
+
     if adapt_models:
         ### CRPS/ Linear Regression
         lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
@@ -1238,9 +1202,9 @@ for tup in tuple_list[row_counter:]:
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
                                                                      risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 0.5e-2)
+            optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 1e-2)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
+                                                  optimizer, epochs = 500, patience = 10, projection = False, relative_tolerance = 0)
             
             
             adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
@@ -1249,12 +1213,12 @@ for tup in tuple_list[row_counter:]:
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), 
                                                                      gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
-            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 0.5e-2)
+            optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 1e-2)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 1000, patience = patience, projection = False, relative_tolerance = 0)
+                                                  optimizer, epochs = 500, patience = 10, projection = False, relative_tolerance = 0)
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
-
+    
     #% Evaluate performance for all models
     #%
     static_models = list(lambda_static_dict) 
@@ -1315,14 +1279,6 @@ for tup in tuple_list[row_counter:]:
         CRPS = 100*np.square(temp_CDF - H_i).mean()            
         temp_mean_QS[m] = CRPS
 
-    #    if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
-    #        plt.plot(temp_qs, label = m)
-    #plt.legend()
-    #plt.ylabel('Pinball loss')
-    #plt.xticks(np.arange(len(target_quant)), target_quant)
-    #plt.xlabel('Quantile')
-    #plt.show()
-    #%
     print('Decision Cost')
     print(temp_Decision_cost[all_models].mean().round(4))
 

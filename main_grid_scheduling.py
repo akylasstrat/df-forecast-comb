@@ -371,9 +371,7 @@ def load_grid_data(case_name, pglib_path):
     #grid['C_up'] = (1 + np.random.uniform(0.5, 0.9, len(grid['Cost'])))*grid['Cost']
     #grid['C_down'] = (1 - np.random.uniform(0.1, 0.3, len(grid['Cost'])))*grid['Cost']
     
-    grid['C_up'] = 1.8*grid['Cost']
-    grid['C_down'] = 0.9*grid['Cost']
-
+    
     grid['w_capacity'] = w_cap_dict[case_name]
     grid['w_bus'] = w_bus_dict[case_name]
     
@@ -382,10 +380,14 @@ def load_grid_data(case_name, pglib_path):
     grid['node_Wind'][grid['w_bus']] = 1
     
     
+    grid['C_up'] = 5*grid['Cost']
+    grid['C_down'] = 0.9*grid['Cost']
+
     R_u_max = np.ones(grid['n_unit'])
-    R_u_max[grid['Cost'] < 10] = (grid['Pmax'][grid['Cost'] < 10]/5).round(2)
-    R_u_max[ (grid['Cost'] >= 10)*(grid['Cost'] < 20) ] = ( grid['Pmax'][(grid['Cost'] >= 10)*(grid['Cost'] < 20)] /2 ).round(2)
-    R_u_max[ grid['Cost'] >= 20 ] = grid['Pmax'][grid['Cost'] >= 20]
+    
+    R_u_max[grid['Cost'] < 10] = 0.1*grid['Pmax'][grid['Cost'] < 10]
+    R_u_max[ (grid['Cost'] >= 10)*(grid['Cost'] < 20) ] = 0.3*grid['Pmax'][(grid['Cost'] >= 10)*(grid['Cost'] < 20)]
+    R_u_max[ grid['Cost'] >= 20 ] = 1*grid['Pmax'][grid['Cost'] >= 20]
     
     R_d_max = R_u_max
     grid['VOLL'] = 200
@@ -611,6 +613,7 @@ for tup in tuple_list[row_counter:]:
         probabilistic_models['knn'] = knn_model_cv.best_estimator_
 
         # CART 1: weather predictors
+        '''
         cart_parameters = {'max_depth':[5, 10, 20, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
         cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
         
@@ -621,7 +624,7 @@ for tup in tuple_list[row_counter:]:
         
         train_w_dict['cart'] = cart_find_weights(trainX_weather, comb_trainX_weather, cart_model)
         test_w_dict['cart'] = cart_find_weights(trainX_weather, testX_weather, cart_model)
-        
+        '''
         #%%
         # CART 2: date predictors
         
