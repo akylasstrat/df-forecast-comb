@@ -736,7 +736,7 @@ def params():
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2]
         
-    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
+    params['crit_quant'] = np.arange(0.3, 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
     params['train_static'] = True
