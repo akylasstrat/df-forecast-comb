@@ -99,9 +99,9 @@ crit_fract = 0.9
 
 decision_cost = []
 qs_cost = []
-for z in ['Z1', 'Z2', 'Z3']:
-    decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
-    qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
+for z in ['Z2', 'Z3']:
+    decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
+    qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
 decision_cost = pd.concat(decision_cost)
 decision_cost.reset_index(inplace = True)
@@ -110,7 +110,7 @@ qs_cost.reset_index(inplace = True)
 
 #%%
 gamma = [0, 0.1, 1]
-static_models = ['knn', 'cart','cart_date', 'rf', 'Ave', 'Insample', 'SalvaBench', 'CRPS'] + [f'DF_{g}' for g in gamma]
+static_models = ['knn','cart_date', 'rf', 'Ave', 'Insample', 'SalvaBench', 'CRPS'] + [f'DF_{g}' for g in gamma]
 adaptive_models = ['CRPS-LR', 'CRPS-MLP', 'SalvaBench-LR','SalvaBench-MLP', 'DF-LR_0', 'DF-MLP_0', 'DF-LR_0.1', 'DF-MLP_0.1','DF-LR_1', 'DF-MLP_1']
 solo_models = ['knn', 'cart','cart_date', 'rf']
 
@@ -133,7 +133,7 @@ plt.ylim()
 rel_crps = qs_cost.copy()
 rel_crps[static_models + adaptive_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models + adaptive_models])/rel_crps['Ave'].values.reshape(-1,1)
 #%%
-farm = [2]
+farm = [3]
 rho = 0.2
 models_plot = static_models
 
