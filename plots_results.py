@@ -99,7 +99,7 @@ crit_fract = 0.9
 
 decision_cost = []
 qs_cost = []
-for z in ['Z2', 'Z3']:
+for z in ['Z2']:
     decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
     qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
@@ -133,7 +133,7 @@ plt.ylim()
 rel_crps = qs_cost.copy()
 rel_crps[static_models + adaptive_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models + adaptive_models])/rel_crps['Ave'].values.reshape(-1,1)
 #%%
-farm = [3]
+farm = [1,2,3]
 rho = 0.2
 models_plot = static_models
 
