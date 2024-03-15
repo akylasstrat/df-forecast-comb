@@ -10,17 +10,13 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 import sys, os
-#import pickle
 import gurobipy as gp
 import torch
 
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 
-#from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from gurobi_ml import add_predictor_constr
-#from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
-#from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import MinMaxScaler
 
 from utility_functions import *
@@ -522,6 +518,10 @@ train_p_list = [p1_hat[:nobs_train], p2_hat[:nobs_train]]
 N_experts = 2
 lambda_static_dict = {}
 
+lambda_static_dict['Expert1'] = np.array([1,0])
+lambda_static_dict['Expert2'] = np.array([0,1])
+lambda_static_dict['Ave'] = np.array([0.5, 0.5])
+
 tensor_trainY = torch.FloatTensor(Y_train)
 #tensor_train_p = torch.FloatTensor(np.column_stack(([p1_hat, p2_hat])))
 tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(2)]
@@ -529,7 +529,7 @@ tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(2)]
 batch_size = 100
 learning_rate = 1e-2
 num_epochs = 1000
-patience = 5
+patience = 10
 apply_softmax = True
 
 train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
@@ -552,8 +552,7 @@ lambda_static_dict['CRPS'] = lambda_crps
 # optimization problem parameters
 target_problem = config['problem']
 critical_fractile = 0.1
-risk_aversion = 0.1
-# gradient descent hyperparameters
+# Stochastic gradient descent hyperparameters
 learning_rate = 1e-2
 batch_size = 200
 
@@ -576,7 +575,7 @@ for m in list(lambda_static_dict.keys()):
 plt.legend()
 plt.show()
 
-
+lambda_static_dict[f'DF_{gamma}'] = np.array([0.39, 0.57])
 lambda_static_dict['Ave'] = np.array([0.5, 0.5])
 #%% Evaluate results
 
