@@ -42,10 +42,9 @@ def params():
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad}
-    params['N_experts'] = 9
+    params['N_experts'] = 3
     params['iterations'] = 5
-    params['target_zones'] = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5',
-                              'Z6', 'Z7', 'Z8', 'Z9', 'Z10']
+    params['target_zones'] = ['Z1', 'Z2', 'Z3']
     
     
     params['crit_quant'] = [0.8]
@@ -99,7 +98,7 @@ crit_fract = 0.9
 
 decision_cost = []
 qs_cost = []
-for z in ['Z2']:
+for z in ['Z1','Z2', 'Z3']:
     decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
     qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
@@ -133,7 +132,7 @@ plt.ylim()
 rel_crps = qs_cost.copy()
 rel_crps[static_models + adaptive_models] = (rel_crps['Ave'].values.reshape(-1,1)-rel_crps[static_models + adaptive_models])/rel_crps['Ave'].values.reshape(-1,1)
 #%%
-farm = [1,2,3]
+farm = [1, 2, 3]
 rho = 0.2
 models_plot = static_models
 
@@ -168,7 +167,7 @@ for i,m in enumerate(models_plot):
 plt.legend()    
 plt.xlabel('Decision Cost Improvement (%)')
 plt.ylabel('CRPS Improvement (%)')
-#plt.savefig(f'{cd}//plots//pwl_cost_CRPS_tradeoff.pdf')
+#plt.savefig(f'{cd}//plots//reg_trad_cost_CRPS_tradeoff.pdf')
 plt.show()
 #%%
 
@@ -180,6 +179,9 @@ lr_labels = ['$\mathtt{CRPSL-LR}$'] + ['$\mathtt{DFL-LR}-$0', '$\mathtt{DFL-LR}-
 mlp_labels = ['$\mathtt{CRPSL-MLP}$'] + ['$\mathtt{DFL-MLP}-$0', '$\mathtt{DFL-MLP}-$0.1', '$\mathtt{DFL-MLP}-$1']
 
 fig, ax  = plt.subplots()
+
+plt.xlabel('Decision Cost Improvement (%)')
+plt.ylabel('CRPS Improvement (%)')
 
 for i,m in enumerate(lr_models_plot):
     plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), marker = 's', color = color[i])
@@ -196,11 +198,10 @@ ax2.scatter(np.NaN, np.NaN, marker = 'd', label = 'NN', color='gray', alpha = 0.
 
 ax2.get_yaxis().set_visible(False)
 
-ax.legend(loc='upper left')
-ax2.legend(loc='center left')
+ax.legend(loc=(0.775, 0.025))
+ax2.legend(loc=(0.57, 0.025))
 
-plt.xlabel('Decision Cost Improvement (%)')
-plt.ylabel('CRPS Improvement (%)')
+
 plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf')
 plt.show()
 
