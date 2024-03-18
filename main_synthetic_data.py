@@ -437,15 +437,19 @@ data_path = f'{cd}\\data'
 #%% 
 
 # experiment parameters
-nobs_train = 5000
-nobs_test = 5000
+nobs_train = 1200
+nobs_test = 3000
 nobs = nobs_train + nobs_test
 y_supp = np.arange(-15, 7, 0.1)
 n_locs = len(y_supp)
 target_quant = np.arange(0.01, 1, 0.01).round(2)
 
-alpha_1 = 1.2
-alpha_2 = 1.2
+#alpha_1 = 1.2
+#alpha_2 = 1.2
+#alpha_3 = 4
+
+alpha_1 = 0.5
+alpha_2 = 0.5
 alpha_3 = 4
 
 beta = -1.3
@@ -458,7 +462,7 @@ error = np.random.normal(scale = 0.5, size = nobs).round(1)
 
 P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
 
-Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta) + error
+Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta) #+ error
 
 Y_train = Y[:nobs_train]
 Y_test = Y[nobs_train:]
@@ -551,16 +555,19 @@ lambda_static_dict['CRPS'] = lambda_crps
 
 # optimization problem parameters
 target_problem = config['problem']
-critical_fractile = 0.1
+critical_fractile = 0.05
+risk_aversion = 0.01
 # Stochastic gradient descent hyperparameters
 learning_rate = 1e-2
-batch_size = 200
+batch_size = 500
+num_epochs = 50
+patience = 10
 
 for gamma in [0]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
-                                                apply_softmax = True, regularizer=None)
+                                                gamma = gamma, problem = target_problem, critic_fract = critical_fractile, apply_softmax = True, 
+                                                risk_aversion = risk_aversion)
     
     optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
     
@@ -575,9 +582,11 @@ for m in list(lambda_static_dict.keys()):
 plt.legend()
 plt.show()
 
-lambda_static_dict[f'DF_{gamma}'] = np.array([0.39, 0.57])
-lambda_static_dict['Ave'] = np.array([0.5, 0.5])
+#lambda_static_dict[f'DF_{gamma}'] = np.array([0.39, 0.57])
+#lambda_static_dict[f'DF_{gamma}'] = np.array([0.4648, 0.5352])
+#lambda_static_dict['Ave'] = np.array([0.5, 0.5])
 #%% Evaluate results
+risk_aversion = 0
 
 all_models = lambda_static_dict.keys()
 Prescriptions = pd.DataFrame(data = np.zeros((nobs_test, len(all_models))), columns = all_models)
@@ -587,22 +596,22 @@ test_Q_list = [Q1_hat[-nobs_test:], Q2_hat[-nobs_test:]]
 
 # Store pinball loss and Decision cost for task-loss
 temp_QS = pd.DataFrame()
-temp_QS['risk_aversion'] = risk_aversion
+#temp_QS['risk_aversion'] = 0
 
 temp_Decision_cost = pd.DataFrame()
 temp_Decision_cost['Quantile'] = [critical_fractile]
-temp_Decision_cost['risk_aversion'] = risk_aversion
+#temp_Decision_cost['risk_aversion'] = 0
 
 temp_mean_QS = temp_Decision_cost.copy()
 
 print('Estimating out-of-sample performance...')
 
 for j, m in enumerate(all_models):
-    print(m)
+    print(f'Model: {m}')
     # Combine PDFs for each observation
     temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
 
-    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion, 
+    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion,
                                         crit_quant = critical_fractile)
        
     Prescriptions[m] = temp_prescriptions
@@ -610,15 +619,13 @@ for j, m in enumerate(all_models):
     # Estimate task-loss for specific model
     #%
     temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, Y_test, 
-                                      target_problem, crit_quant = critical_fractile, 
-                                      risk_aversion = risk_aversion)
+                                      target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
     #%
     
     # Evaluate QS (approximation of CRPS) for each model
     # find quantile forecasts
     temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(nobs_test)])
     temp_qs = 100*pinball(temp_q_forecast, Y_test, target_quant).round(4)
-    print(m)
 
     temp_QS[m] = [temp_qs]
     
@@ -627,14 +634,6 @@ for j, m in enumerate(all_models):
     
     CRPS = 100*np.square(temp_CDF - H_i).mean()
     temp_mean_QS[m] = CRPS
-
-#    if m in ['Ave', 'SalvaBench', 'CRPS', 'DF_0.1', 'DF_1']:
-#        plt.plot(temp_qs, label = m)
-#plt.legend()
-#plt.ylabel('Pinball loss')
-#plt.xticks(np.arange(len(target_quant)), target_quant)
-#plt.xlabel('Quantile')
-#plt.show()
 
 print('Decision Cost')
 print(temp_Decision_cost[all_models].mean().round(4))

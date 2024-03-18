@@ -90,6 +90,23 @@ for z in ['Z1', 'Z2', 'Z3']:
     qs_cost.to_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__mean_QS.csv')
     pinball_loss.to_csv(f'{cd}\\results\\solar_different_prob_models\\{z}_{target_prob}__QS.csv')
 '''
+
+#%% Grid scheduling results
+config = params()
+zone = 'Z1'
+Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m']
+case = Cases[0]
+
+results_path = f'{cd}\\results\\grid_scheduling'
+
+da_cost = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_DA_cost.csv', index_col = 0)
+rt_cost = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_RT_cost.csv', index_col = 0)
+crps = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_mean_QS.csv', index_col = 0)
+
+total_cost = da_cost + rt_cost
+
+print(total_cost.mean().round(3))
+print(crps.mean().round(3))
 #%%
 config = params()
 config['save'] = False
