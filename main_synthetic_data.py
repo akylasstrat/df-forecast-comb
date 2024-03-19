@@ -7,7 +7,6 @@ Synthetic case study
 
 import pandas as pd
 import numpy as np
-import itertools
 import matplotlib.pyplot as plt
 import sys, os
 import gurobipy as gp
@@ -15,9 +14,6 @@ import torch
 
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
-
-from gurobi_ml import add_predictor_constr
-from sklearn.preprocessing import MinMaxScaler
 
 from utility_functions import *
 from optimal_transport_functions import *
@@ -395,7 +391,7 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
         return (target_scen@weights)
  
 def nn_params():
-    'NN hyperparameters'
+    'Adam optimizer hyperparameters'
     nn_params = {}
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
@@ -408,18 +404,12 @@ def params():
     ''' Set up the experiment parameters'''
 
     params = {}
-
-    params['start_date'] = '2012-01-01'
-    params['split_date_prob'] = '2013-01-01' # Defines train/test split
-    params['split_date_comb'] = '2014-01-01' # Defines train/test split
-    params['end_date'] = '2014-07-01'
     
     params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [3]
         
     params['crit_quant'] = np.arange(0.5, 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
@@ -437,10 +427,14 @@ data_path = f'{cd}\\data'
 #%% 
 
 # experiment parameters
-nobs_train = 1200
-nobs_test = 3000
+nobs_train = 5000
+nobs_test = 5000
 nobs = nobs_train + nobs_test
-y_supp = np.arange(-15, 7, 0.1)
+# fixed term to ensure everything is non-negative
+# ** Does not affect the results, only to speed up computations with nonnegativity of parameters
+bias_term = 15
+
+y_supp = np.arange(-15, 7, 0.1).round(1) + bias_term
 n_locs = len(y_supp)
 target_quant = np.arange(0.01, 1, 0.01).round(2)
 
@@ -448,21 +442,24 @@ target_quant = np.arange(0.01, 1, 0.01).round(2)
 #alpha_2 = 1.2
 #alpha_3 = 4
 
-alpha_1 = 0.5
-alpha_2 = 0.5
-alpha_3 = 4
+alpha_1 = 1.1
+alpha_2 = 1.1
+alpha_3 = 5
 
 beta = -1.3
 
-X0 = np.random.normal(size = nobs).round(1)
-X1 = np.random.normal(size = nobs).round(1)
-X2 = np.random.normal(size = nobs).round(1)
+X0 = np.random.normal(loc = bias_term, scale = 1, size = nobs).round(1)
+X1 = np.random.normal(size = nobs, scale = 1).round(1)
+X2 = np.random.normal(size = nobs, scale = 1).round(1)
 X3 = np.random.normal(size = nobs).round(1)
-error = np.random.normal(scale = 0.5, size = nobs).round(1)
+error = np.random.normal(scale = 0.25, size = nobs).round(1)
 
 P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
 
-Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta) #+ error
+Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta)# + error
+
+Y = Y.round(2)
+Y = projection(Y, ub = y_supp.max(), lb = y_supp.min())
 
 Y_train = Y[:nobs_train]
 Y_test = Y[nobs_train:]
@@ -510,6 +507,10 @@ plt.plot(pinball_1, label = 'Expert 1')
 plt.plot(pinball_2, label = 'Expert 2')
 plt.show()
 
+print('Average Pinball Loss')
+print(f'Expert 1:{pinball_1.mean()}')
+print(f'Expert 2:{pinball_2.mean()}')
+
 for i in range(20):
     plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
     plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
@@ -530,13 +531,15 @@ tensor_trainY = torch.FloatTensor(Y_train)
 #tensor_train_p = torch.FloatTensor(np.column_stack(([p1_hat, p2_hat])))
 tensor_train_p_list = [torch.FloatTensor(train_p_list[i]) for i in range(2)]
 
-batch_size = 100
+# Optimizer hyperparameters
+batch_size = 500
 learning_rate = 1e-2
-num_epochs = 1000
+num_epochs = 100
 patience = 10
-apply_softmax = True
 
 train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+
+from torch_layers_functions import *
 
 #### CRPS minimization/ with torch layer
 lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -555,26 +558,49 @@ lambda_static_dict['CRPS'] = lambda_crps
 
 # optimization problem parameters
 target_problem = config['problem']
-critical_fractile = 0.05
-risk_aversion = 0.01
-# Stochastic gradient descent hyperparameters
-learning_rate = 1e-2
+critical_fractile = 0.1
+regularization = 0.01 # to help convergence of the gradient-descent
+
+
+# Optimizer hyperparameters
 batch_size = 500
-num_epochs = 50
-patience = 10
+learning_rate = 1e-2
+num_epochs = 100
+patience = 5
 
 for gamma in [0]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                 gamma = gamma, problem = target_problem, critic_fract = critical_fractile, apply_softmax = True, 
-                                                risk_aversion = risk_aversion)
+                                                risk_aversion = regularization)
     
     optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
     
-    lpool_newsv_model.train_model(train_data_loader, [], optimizer, epochs = num_epochs, 
-                                      patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
+    lpool_newsv_model.train_model(train_data_loader, [], optimizer, epochs = num_epochs, patience = patience, projection = False, validation = False, relative_tolerance = 0)
 
     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+
+#%%
+
+trainZopt = np.zeros((nobs_train, N_experts))
+testZopt = np.zeros((nobs_test, N_experts))
+    
+print('Finding optimal decisions in training set')
+for j in range(N_experts):
+    temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = regularization, 
+                                crit_quant = critical_fractile)
+    trainZopt[:,j] = temp_z_opt
+    
+# Set weights to in-sample performance
+lambda_tuned_inv, _ = insample_weight_tuning(Y_train, trainZopt, problem = target_problem,
+                                             crit_quant = critical_fractile, support = y_supp, risk_aversion = regularization)
+lambda_static_dict['Insample'] = lambda_tuned_inv    
+
+
+# Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
+#lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile, support = y_supp, bounds = False, risk_aversion = risk_aversion)
+#lambda_static_dict['SalvaBench'] = lambda_
+
 
 #%%
 for m in list(lambda_static_dict.keys()):
@@ -586,8 +612,7 @@ plt.show()
 #lambda_static_dict[f'DF_{gamma}'] = np.array([0.4648, 0.5352])
 #lambda_static_dict['Ave'] = np.array([0.5, 0.5])
 #%% Evaluate results
-risk_aversion = 0
-
+#regularization = 0.01
 all_models = lambda_static_dict.keys()
 Prescriptions = pd.DataFrame(data = np.zeros((nobs_test, len(all_models))), columns = all_models)
 
@@ -596,11 +621,11 @@ test_Q_list = [Q1_hat[-nobs_test:], Q2_hat[-nobs_test:]]
 
 # Store pinball loss and Decision cost for task-loss
 temp_QS = pd.DataFrame()
-#temp_QS['risk_aversion'] = 0
+temp_QS['risk_aversion'] = regularization
 
 temp_Decision_cost = pd.DataFrame()
 temp_Decision_cost['Quantile'] = [critical_fractile]
-#temp_Decision_cost['risk_aversion'] = 0
+temp_Decision_cost['risk_aversion'] = regularization
 
 temp_mean_QS = temp_Decision_cost.copy()
 
@@ -611,7 +636,7 @@ for j, m in enumerate(all_models):
     # Combine PDFs for each observation
     temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
 
-    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = risk_aversion,
+    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = regularization,
                                         crit_quant = critical_fractile)
        
     Prescriptions[m] = temp_prescriptions
@@ -619,7 +644,7 @@ for j, m in enumerate(all_models):
     # Estimate task-loss for specific model
     #%
     temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, Y_test, 
-                                      target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+                                      target_problem, crit_quant = critical_fractile, risk_aversion = regularization)
     #%
     
     # Evaluate QS (approximation of CRPS) for each model
@@ -632,7 +657,7 @@ for j, m in enumerate(all_models):
     temp_CDF = temp_pdf.cumsum(1)
     H_i = 1*np.repeat(y_supp.reshape(1,-1), len(Y_test), axis = 0)>=Y_test.reshape(-1,1)
     
-    CRPS = 100*np.square(temp_CDF - H_i).mean()
+    CRPS = np.square(temp_CDF - H_i).sum(1).mean()
     temp_mean_QS[m] = CRPS
 
 print('Decision Cost')
@@ -640,3 +665,15 @@ print(temp_Decision_cost[all_models].mean().round(4))
 
 print('CRPS')
 print(temp_mean_QS[all_models].mean().round(4))
+
+if config['save']:
+    #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+    lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+    lamda_static_df.to_csv(f'{results_path}\\lambda_static.csv')
+    
+    temp_Decision_cost.to_csv(f'{results_path}\\synthetic_Decision_cost.csv')
+    temp_mean_QS.to_csv(f'{results_path}\\synthetic_QS_mean.csv')
+    
+    
+    
+    

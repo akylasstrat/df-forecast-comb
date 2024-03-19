@@ -487,7 +487,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
             sqrt_prob_weights = cp.Parameter(n_locations, nonneg = True)
             
             newsv_constraints = []
-            newsv_constraints += [error == self.support - z,]
+            newsv_constraints += [error == self.support - z, z <= self.support.max()]
             #newsv_constraints += [pinball_loss >= self.crit_fract*(error), pinball_loss >= (self.crit_fract - 1)*(error)]
             
             pinball_loss_expr = cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))
@@ -1195,8 +1195,12 @@ class LinearPoolCRPSLayer(nn.Module):
                 comb_CDF = self.forward(batch_data[:-1])
                 
                 # estimate CRPS (heavyside function)
-                loss_i = [torch.square( comb_CDF[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
-                loss = sum(loss_i)/len(loss_i)
+                
+                
+                #loss_i = [torch.square( comb_CDF[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
+                loss_i = torch.sum(torch.square( comb_CDF - 1*(self.support >= y_batch.reshape(-1,1))), 1)
+                
+                loss = torch.mean(loss_i)
 
                 # Decomposition (see Online learning with the Continuous Ranked Probability Score for ensemble forecasting) 
                 #divergence_i = [(weights[j]*torch.norm(self.support - y_batch[i] )) for ]
