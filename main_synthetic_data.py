@@ -442,9 +442,9 @@ target_quant = np.arange(0.01, 1, 0.01).round(2)
 #alpha_2 = 1.2
 #alpha_3 = 4
 
-alpha_1 = 1.1
-alpha_2 = 1.1
-alpha_3 = 5
+alpha_1 = 1.2
+alpha_2 = 1.2
+alpha_3 = 4.5
 
 beta = -1.3
 
@@ -510,7 +510,7 @@ plt.show()
 print('Average Pinball Loss')
 print(f'Expert 1:{pinball_1.mean()}')
 print(f'Expert 2:{pinball_2.mean()}')
-
+#%%
 for i in range(20):
     plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
     plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
@@ -558,7 +558,7 @@ lambda_static_dict['CRPS'] = lambda_crps
 
 # optimization problem parameters
 target_problem = config['problem']
-critical_fractile = 0.1
+critical_fractile = 0.2
 regularization = 0.01 # to help convergence of the gradient-descent
 
 
@@ -628,6 +628,8 @@ temp_Decision_cost['Quantile'] = [critical_fractile]
 temp_Decision_cost['risk_aversion'] = regularization
 
 temp_mean_QS = temp_Decision_cost.copy()
+
+#regularization = 0.01
 
 print('Estimating out-of-sample performance...')
 
