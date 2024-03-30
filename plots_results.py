@@ -95,7 +95,7 @@ for z in ['Z1', 'Z2', 'Z3']:
 config = params()
 zone = 'Z1'
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m']
-case = Cases[0]
+case = Cases[1]
 
 results_path = f'{cd}\\results\\grid_scheduling'
 
