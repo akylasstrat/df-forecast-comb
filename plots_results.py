@@ -102,12 +102,24 @@ results_path = f'{cd}\\results\\grid_scheduling'
 da_cost = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_DA_cost.csv', index_col = 0)
 rt_cost = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_RT_cost.csv', index_col = 0)
 crps = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_mean_QS.csv', index_col = 0)
+lambda_static = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_lambda_static.csv', index_col = 0)
 
 total_cost = da_cost + rt_cost
 
 print(total_cost.mean().round(3))
 print(crps.mean().round(3))
-#%%
+
+fig, ax  = plt.subplots()
+lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0', 'DF_0.1']].plot(kind='bar', ax = ax)
+plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
+plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0', '$\mathtt{DFL}$-0.1'], ncol = 2)
+plt.xlabel('Component forecasts')
+plt.ylabel('Combination weights $\mathtt{\lambda}$')
+plt.savefig(f'{cd}\\plots\\lambda_barplot_grid_sched.pdf')
+plt.show()
+
+
+#%% Trading results
 config = params()
 config['save'] = False
 target_prob = 'reg_trad'
@@ -119,10 +131,24 @@ for z in ['Z1','Z2', 'Z3']:
     decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
     qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
+
 decision_cost = pd.concat(decision_cost)
 decision_cost.reset_index(inplace = True)
 qs_cost = pd.concat(qs_cost)
 qs_cost.reset_index(inplace = True)
+#%% Plot lambdas for specific combination
+
+lambda_static = pd.read_csv(f'{cd}\\results\\solar_new_results\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
+
+fig, ax  = plt.subplots()
+lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']].plot(kind='bar', ax = ax)
+plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
+plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0', '$\mathtt{DFL}$-0.1', 
+            '$\mathtt{DFL}$-1'], ncol = 2)
+plt.xlabel('Component forecasts')
+plt.ylabel('Combination weights $\mathtt{\lambda}$')
+plt.savefig(f'{cd}\\plots\\lambda_barplot_trading.pdf')
+plt.show()
 
 #%%
 gamma = [0, 0.1, 1]
@@ -197,29 +223,29 @@ mlp_labels = ['$\mathtt{CRPSL-MLP}$'] + ['$\mathtt{DFL-MLP}-$0', '$\mathtt{DFL-M
 
 fig, ax  = plt.subplots()
 
-plt.xlabel('Decision Cost Improvement (%)')
-plt.ylabel('CRPS Improvement (%)')
+plt.xlabel('Cost improvement over $\mathtt{OLP}$ (%)')
+plt.ylabel('CRPS improvement over $\mathtt{OLP}$ (%)')
 
 for i,m in enumerate(lr_models_plot):
     plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), marker = 's', color = color[i])
 for i,m in enumerate(mlp_models_plot):
     plt.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), marker = 'd', color = color[i])
 for i,m in enumerate(models_plot):
-    ax.scatter(np.NaN, np.NaN, marker = 'o', label = labels[i], color=color[i])
+    ax.scatter(100*temp_cost_df[m].mean(), 100*temp_crps_df[m].mean(), marker = 'o', label = labels[i], color=color[i])
 
 #plt.legend()    
 
 ax2 = ax.twinx()
-ax2.scatter(np.NaN, np.NaN, marker = 's', label = 'Linear', color='gray', alpha = 0.5)
-ax2.scatter(np.NaN, np.NaN, marker = 'd', label = 'NN', color='gray', alpha = 0.5)
+ax2.scatter(np.NaN, np.NaN, marker = 's', label = '$\mathtt{LR}$', color='gray', alpha = 0.5)
+ax2.scatter(np.NaN, np.NaN, marker = 'd', label = '$\mathtt{NN}$', color='gray', alpha = 0.5)
 
 ax2.get_yaxis().set_visible(False)
 
-ax.legend(loc=(0.775, 0.025))
-ax2.legend(loc=(0.57, 0.025))
+lgd1 = ax.legend(loc=(0.01, 0.6))
+lgd2 = ax2.legend(loc=(0.25, 0.6))
+ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
-
-plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf')
+plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
 plt.show()
 
 #%%

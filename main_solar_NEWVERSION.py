@@ -989,11 +989,11 @@ for tup in tuple_list[row_counter:]:
             print(m)
             plt.plot(temp_qs, label = m)
         #plt.plot(100*pinball(test_q_pred, testY[target_zone].values, target_quant).round(4), label = 'QR reg')
-        plt.legend()
-        plt.ylabel('Pinball loss')
+        plt.legend(['$k$$\mathtt{NN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'])
+        plt.ylabel('Quantile Score')
         plt.xlabel('Quantile')
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
-        plt.savefig(f'{cd}\\plots\\pinball_loss_model.pdf')
+        plt.savefig(f'{cd}\\plots\\quantile_score_solar_forecast.pdf')
         plt.show()
         #%%
         #% Visualize some prob. forecasts for sanity check
