@@ -827,9 +827,13 @@ class LinearPoolSchedLayer(nn.Module):
                 #RT_constraints += [cost_RT[s] ==  (grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s]]
                                            
             RT_cost_expr = cp.sum([ prob_weights[s]*(grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] for s in range(n_locations)])
-            
-            #l2_regularization = (prob_weights@sq_error)
             objective_funct = cp.Minimize( cost_DA +  RT_cost_expr) 
+            #l2_regularization = (prob_weights@sq_error)
+            
+            ### Alternatively: only RT re-dispatch costs
+            #RT_cost_expr = cp.sum([ prob_weights[s]*(grid['C_up'] - grid['Cost'])@r_up[:,s] + (grid['Cost'] - grid['C_down'])@r_down[:,s] for s in range(n_locations)])            
+            #objective_funct = cp.Minimize( RT_cost_expr) 
+            
             sched_problem = cp.Problem(objective_funct, DA_constraints + RT_constraints)
              
             self.sched_layer = CvxpyLayer(sched_problem, parameters=[prob_weights],
