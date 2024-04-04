@@ -470,7 +470,7 @@ def params():
     params['split_date_comb'] = '2014-01-01' # Defines train/test split
     params['end_date'] = '2014-07-01'
     
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
