@@ -118,12 +118,18 @@ def insample_weight_tuning(grid, target_y, train_z_opt,
     
     print('Estimate in-sample task loss...')
     #z_opt = np.zeros((n_obs, n_models))
-    insample_cost = np.zeros((n_experts))
+    insample_da_cost = np.zeros((n_experts))
+    insample_rt_cost = np.zeros((n_experts))
+
     insample_inverse_cost = np.zeros((n_experts))
 
     for j in range(n_experts):        
-        insample_cost[j] = scheduling_task_loss(grid, train_z_opt[j], target_y.reshape(-1))
-        insample_inverse_cost[j] = 1/insample_cost[j]
+        temp_da_cost, temp_rt_cost = scheduling_task_loss(grid, train_z_opt[j], target_y.reshape(-1))
+        insample_da_cost[j] = temp_da_cost
+        insample_rt_cost[j] = temp_rt_cost
+        
+        
+        insample_inverse_cost[j] = 1/(insample_da_cost[j] + insample_rt_cost[j])
 
     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
@@ -180,7 +186,8 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     actual_copy = actual.copy().reshape(-1)
     n_samples = len(prescr_copy)
     Task_loss = []
-    
+    DA_loss = []
+    RT_loss = []
     # Solve the RT scheduling problem    
     rt_sched = gp.Model()
     rt_sched.setParam('OutputFlag', 0)
@@ -230,9 +237,15 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
         for c in [c1,c2]: rt_sched.remove(c)
         
         Task_loss.append(rt_sched.ObjVal)
+
+        DA_loss.append(da_cost.X)
+        RT_loss.append(rt_cost.X)
         
     Task_loss = np.array(Task_loss)
-    return Task_loss.mean()
+    DA_loss = np.array(DA_loss)
+    RT_loss = np.array(RT_loss)
+
+    return DA_loss.mean(), RT_loss.mean()
 
 def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     ''' Solves stochastic scheduling problem
@@ -801,7 +814,7 @@ for tup in tuple_list[row_counter:]:
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
     
-    
+    #%%
     trainZopt = N_experts*[np.zeros((n_train_obs, grid['n_unit']))]
     testZopt = N_experts*[np.zeros((n_test_obs, grid['n_unit']))]
 
@@ -821,7 +834,7 @@ for tup in tuple_list[row_counter:]:
         
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
-    
+    #%%
     # Set weights to in-sample performance
     lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, support = y_supp, risk_aversion = risk_aversion)
     
@@ -879,7 +892,7 @@ for tup in tuple_list[row_counter:]:
         lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
 
-    
+    #%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
@@ -1012,8 +1025,9 @@ for tup in tuple_list[row_counter:]:
         # Estimate task-loss for specific model
         #%
         
-        temp_RT_cost[m] = scheduling_task_loss(grid, Prescriptions[m], testY.values)
-        temp_DA_cost[m] = (Prescriptions[m]@grid['Cost']).mean()
+        temp_da_cost_out, temp_rt_cost_out = scheduling_task_loss(grid, Prescriptions[m], testY.values)
+        temp_RT_cost[m] = temp_rt_cost_out
+        temp_DA_cost[m] = temp_da_cost_out
         #%
         print(m)
         
