@@ -1099,7 +1099,10 @@ class LinearPoolSchedLayer(nn.Module):
                         # recover best weights
                         self.load_state_dict(best_weights)
                         return
-                
+        
+        print('Reached epoch limit.')
+        self.load_state_dict(best_weights)
+        return
 
     def evaluate(self, data_loader):
         # evaluate loss criterion/ used for estimating validation loss
