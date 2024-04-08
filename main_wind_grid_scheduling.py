@@ -118,18 +118,67 @@ def insample_weight_tuning(grid, target_y, train_z_opt,
     
     print('Estimate in-sample task loss...')
     #z_opt = np.zeros((n_obs, n_models))
-    insample_cost = np.zeros((n_experts))
+    insample_da_cost = np.zeros((n_experts))
+    insample_rt_cost = np.zeros((n_experts))
+
     insample_inverse_cost = np.zeros((n_experts))
 
     for j in range(n_experts):        
-        insample_cost[j] = scheduling_task_loss(grid, train_z_opt[j], target_y.reshape(-1))
-        insample_inverse_cost[j] = 1/insample_cost[j]
+        temp_da_cost, temp_rt_cost = scheduling_task_loss(grid, train_z_opt[j], target_y.reshape(-1))
+        insample_da_cost[j] = temp_da_cost
+        insample_rt_cost[j] = temp_rt_cost
+        
+        
+        insample_inverse_cost[j] = 1/(insample_da_cost[j] + insample_rt_cost[j])
 
     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
 
     return lambdas_inv, lambdas_softmax
-                
+
+def perfect_scheduling_cost(grid, actual, regularization = 0):
+    'Estimates the dispatch cost of the perfect foresight solution'
+
+    actual_copy = actual.copy().reshape(-1)
+    n_samples = len(actual)
+    Task_loss = []
+    
+    # Solve the RT scheduling problem    
+    model = gp.Model()
+    model.setParam('OutputFlag', 0)
+
+    # DA Variables
+    p_DA = model.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'p_G')
+    
+    # cost variables
+    da_cost = model.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
+
+    # RT Variables
+    w_rt = model.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+
+    # Add generator constraints, DA & RT
+    model.addConstr( p_DA <= grid['Pmax'].reshape(-1))    
+        
+    # RT balancing constraint    
+    model.addConstr( p_DA.sum() + grid['w_capacity']*w_rt.sum() == grid['Pd'].sum())
+    
+    # Expected decision cost for DA + RT scheduling
+    model.addConstr( da_cost == grid['Cost']@p_DA)
+
+    model.setObjective(da_cost)
+    
+    for i in range(n_samples):
+
+        # Solve DA market with predictions, save results
+        c2 = model.addConstr(w_rt == actual_copy[i])
+        model.optimize()
+        for c in [c2]: model.remove(c)
+        
+        Task_loss.append(model.ObjVal)
+        
+    Task_loss = np.array(Task_loss)
+    return Task_loss.mean()
+
 def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     'Estimates aggregated DA+RT cost'
 
@@ -137,7 +186,8 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     actual_copy = actual.copy().reshape(-1)
     n_samples = len(prescr_copy)
     Task_loss = []
-    
+    DA_loss = []
+    RT_loss = []
     # Solve the RT scheduling problem    
     rt_sched = gp.Model()
     rt_sched.setParam('OutputFlag', 0)
@@ -187,10 +237,15 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
         for c in [c1,c2]: rt_sched.remove(c)
         
         Task_loss.append(rt_sched.ObjVal)
+
+        DA_loss.append(da_cost.X)
+        RT_loss.append(rt_cost.X)
         
     Task_loss = np.array(Task_loss)
-    
-    return Task_loss.mean()
+    DA_loss = np.array(DA_loss)
+    RT_loss = np.array(RT_loss)
+
+    return DA_loss.mean(), RT_loss.mean()
 
 def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     ''' Solves stochastic scheduling problem
@@ -426,7 +481,7 @@ def params():
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
 
-    params['target_zone'] = [1]
+    params['target_zone'] = [2]
     params['dataset'] = 'wind' # do not change
     
     
@@ -445,7 +500,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
@@ -461,7 +516,7 @@ for i, case in enumerate(Cases):
     w_bus_dict[case] = w_bus[i]
     w_cap_dict[case] = w_cap[i]
 
-target_case = Cases[1]
+target_case = Cases[3]
 grid = load_grid_data(target_case, pglib_path)
 #grid['Pd'][0] = grid['Pd'][0]  + 100
 grid['Pd'] = 1.5*grid['Pd']
@@ -655,11 +710,14 @@ for tup in tuple_list[row_counter:]:
             print(m)
             plt.plot(temp_qs, label = m)
         #plt.plot(100*pinball(test_q_pred, testY[target_zone].values, target_quant).round(4), label = 'QR reg')
-        plt.legend()
-        plt.ylabel('Pinball loss')
+        plt.ylabel('Quantile Score')
         plt.xlabel('Quantile')
+        
+        plt.legend(['$k$$\mathtt{NN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'])
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
+        #plt.savefig(f'{cd}\\plots\\quantile_score_wind_forecast.pdf')
         plt.show()
+
         #%%
         #% Visualize some prob. forecasts for sanity check
         #%
@@ -771,11 +829,11 @@ for tup in tuple_list[row_counter:]:
             lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
         else:
             lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
-#%%
-    if config['save']:
-        #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
-        lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
-        lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
+
+        if config['save']:
+            #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
+            lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+            lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
 
 #%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
@@ -834,8 +892,9 @@ for tup in tuple_list[row_counter:]:
         # Estimate task-loss for specific model
         #%
         
-        temp_RT_cost[m] = scheduling_task_loss(grid, Prescriptions[m], testY.values)
-        temp_DA_cost[m] = (Prescriptions[m]@grid['Cost']).mean()
+        temp_da_cost_out, temp_rt_cost_out = scheduling_task_loss(grid, Prescriptions[m], testY.values)
+        temp_RT_cost[m] = temp_rt_cost_out
+        temp_DA_cost[m] = temp_da_cost_out
         #%
         print(m)
         

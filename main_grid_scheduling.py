@@ -776,7 +776,7 @@ for tup in tuple_list[row_counter:]:
         
         plt.legend(['$k$$\mathtt{NN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'])
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
-        plt.savefig(f'{cd}\\plots\\quantile_score_wind_forecast.pdf')
+        #plt.savefig(f'{cd}\\plots\\quantile_score_wind_forecast.pdf')
         plt.show()
         #%%
         #% Visualize some prob. forecasts for sanity check

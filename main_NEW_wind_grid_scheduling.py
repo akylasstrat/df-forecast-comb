@@ -470,9 +470,9 @@ def params():
     params['risk_aversion'] = [0.2] # {mse, newsvendor, cvar, reg_trad, pwl}
 
     params['dataset'] = 'wind' # !!! Do not change
-    params['gamma_list'] = [0.001, 0.01]
+    params['gamma_list'] = [0, 0.001, 0.01]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 4
+    params['target_ieee_case'] = 1
     
     params['train_static'] = True
     
@@ -485,7 +485,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 

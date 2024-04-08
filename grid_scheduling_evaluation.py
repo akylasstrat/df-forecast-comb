@@ -480,7 +480,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -499,7 +499,7 @@ for i, case in enumerate(Cases):
     w_bus_dict[case] = w_bus[i]
     w_cap_dict[case] = w_cap[i]
 
-target_case = Cases[0]
+target_case = Cases[1]
 grid = load_grid_data(target_case, pglib_path)
 
 dataset = 'wind'
