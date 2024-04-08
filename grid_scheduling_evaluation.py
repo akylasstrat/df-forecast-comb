@@ -480,7 +480,7 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/astratig/pglib-opf/'
+pglib_path =  'C:/Users/akyla/pglib-opf/'
 
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -501,6 +501,26 @@ for i, case in enumerate(Cases):
 
 target_case = Cases[0]
 grid = load_grid_data(target_case, pglib_path)
+
+dataset = 'wind'
+zone_target = [2]
+
+filename_prefix = f'NEWRESULTS_Z{zone_target[0]}_{target_case}_{dataset}'
+
+DA_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_DA_cost.csv', index_col = 0)
+RT_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_RT_cost.csv', index_col = 0)
+mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
+
+lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
+#%%
+fig, ax  = plt.subplots()
+lamda_static_df[['Ave', 'Insample', 'CRPS', 'DF_0', 'DF_0.001']].plot(kind='bar', ax = ax)
+plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
+plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0', '$\mathtt{DFL}$-0.1'], ncol = 2)
+plt.xlabel('Component forecasts')
+plt.ylabel('Combination weights $\mathtt{\lambda}$')
+plt.savefig(f'{cd}\\plots\\lambda_barplot_{dataset}_grid_sched.pdf')
+plt.show()
 
 #%% Data pre-processing
 zone_target = config['target_zone']
