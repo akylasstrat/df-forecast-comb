@@ -93,29 +93,29 @@ for z in ['Z1', 'Z2', 'Z3']:
 
 #%% Grid scheduling results
 config = params()
-zone = 'Z1'
+zone = 'Z2'
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m']
-case = Cases[0]
+case = Cases[1]
 
 results_path = f'{cd}\\results\\grid_scheduling'
 
-da_cost = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_DA_cost.csv', index_col = 0)
-rt_cost = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_RT_cost.csv', index_col = 0)
-crps = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_mean_QS.csv', index_col = 0)
-lambda_static = pd.read_csv(f'{results_path}\\{zone}_{case}_wind_lambda_static.csv', index_col = 0)
+da_cost = pd.read_csv(f'{results_path}\\NEWRESULTS_{zone}_{case}_wind_DA_cost.csv', index_col = 0)
+rt_cost = pd.read_csv(f'{results_path}\\NEWRESULTS_{zone}_{case}_wind_RT_cost.csv', index_col = 0)
+crps = pd.read_csv(f'{results_path}\\NEWRESULTS_{zone}_{case}_wind_mean_QS.csv', index_col = 0)
+lambda_static = pd.read_csv(f'{results_path}\\NEWRESULTS_{zone}_{case}_wind_lambda_static.csv', index_col = 0)
 
-total_cost = da_cost + rt_cost
+total_regret = da_cost + rt_cost - da_cost['Perfect'].values[0]
 
-print(total_cost.mean().round(3))
+print(total_regret.mean().round(3))
 print(crps.mean().round(3))
 
 fig, ax  = plt.subplots()
-lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0', 'DF_0.1']].plot(kind='bar', ax = ax)
+lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0.001', 'DF_0.01']].plot(kind='bar', ax = ax)
 plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
-plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0', '$\mathtt{DFL}$-0.1'], ncol = 2)
+plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0.001', '$\mathtt{DFL}$-0.01'], ncol = 2)
 plt.xlabel('Component forecasts')
 plt.ylabel('Combination weights $\mathtt{\lambda}$')
-plt.savefig(f'{cd}\\plots\\lambda_barplot_grid_sched.pdf')
+#plt.savefig(f'{cd}\\plots\\lambda_barplot_wind_grid_sched.pdf')
 plt.show()
 
 
