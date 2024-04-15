@@ -128,8 +128,8 @@ crit_fract = 0.9
 decision_cost = []
 qs_cost = []
 for z in ['Z1','Z2', 'Z3']:
-    decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
-    qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_new_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
+    decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_trading_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
+    qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_trading_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
 
 decision_cost = pd.concat(decision_cost)
@@ -138,7 +138,7 @@ qs_cost = pd.concat(qs_cost)
 qs_cost.reset_index(inplace = True)
 #%% Plot lambdas for specific combination
 
-lambda_static = pd.read_csv(f'{cd}\\results\\solar_new_results\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
+lambda_static = pd.read_csv(f'{cd}\\results\\solar_trading_results\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
 
 fig, ax  = plt.subplots()
 lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']].plot(kind='bar', ax = ax)
