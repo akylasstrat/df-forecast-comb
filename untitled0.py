@@ -820,85 +820,13 @@ for tup in tuple_list[row_counter:]:
     #%%
     ###########% Static forecast combinations
     lambda_static_dict = {}
-        
-    for i,learner in enumerate(all_learners):
-        temp_ind = np.zeros(N_experts)
-        temp_ind[i] = 1
-        lambda_static_dict[f'{learner}'] = temp_ind
-        
-    lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
-                
-    
-    # Set weights to in-sample performance
-    lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, support = y_supp, risk_aversion = risk_aversion)
-    
-    # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
-    #lambda_ = averaging_decisions(grid, train_targetY, trainZopt, support = y_supp, bounds = False, risk_aversion = risk_aversion)
 
-    lambda_static_dict['Insample'] = lambda_tuned_inv    
-    #lambda_static_dict['SalvaBench'] = lambda_
-    #%%
-    #% CRPS learning
+    lamda_static_df = pd.read_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv', index_col = 0)
     
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
-    
-    if row_counter == 0:
-        #### CRPS minimization/ with torch layer
-        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                               apply_softmax = True)
-        optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-        lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-                                     projection = True)
-        print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
-
-        if apply_softmax:
-            lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-        else:
-            lambda_crps = to_np(lpool_crps_model.weights)
-    
-        
-        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
-        
-    lambda_static_dict['CRPS'] = lambda_crps
-    
-    #%%
-    ##### Decision-focused combination for different values of gamma     
-    from torch_layers_functions import * 
-    patience = 5
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 500)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 500)
-    
-    #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]
-    
-    for gamma in config['gamma_list']:
-        
-        lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'stoch', 
-                                                 regularization = risk_aversion)
-        
-        optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
-        
-        lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = 30, 
-                                          patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
-        if apply_softmax:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
-        else:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
-        
-        
-
-        if config['save']:
-            #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
-            lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
-            lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
-
-
-    for m in list(lambda_static_dict.keys())[N_experts:]:
-        plt.plot(lambda_static_dict[m], label = m)
-    plt.legend()
-    plt.show()
-
+    for m in lamda_static_df.columns:
+        lambda_static_dict[m] = lamda_static_df[m].values
+            
+    asdf
 
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
