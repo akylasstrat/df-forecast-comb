@@ -57,20 +57,7 @@ def averaging_decisions(target_y, train_z_opt, problem,
     #z_opt = np.zeros((n_obs, n_models))
     insample_cost = np.zeros(n_models)
     insample_inverse_cost = np.zeros(n_models)
-    
-    for j in range(n_models):
-        '''
-        if problem == 'newsvendor':
-            for i in range(n_obs):
-                # Solve stochastic problem, find decision
-                z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
-            # Estimate decision cost (regret)
-        elif problem == 'reg_trad':
-            temp_z_opt = solve_opt_prob(support, prob_vectors[j], problem, risk_aversion = risk_aversion, 
-                                        crit_quant = crit_fract)
-            z_opt[:,j] = temp_z_opt
-        '''
-        
+            
     #### set optimization problem    
     m = gp.Model()
     if verbose == 0: 
@@ -149,252 +136,6 @@ def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.0
     m.optimize()
     
     return lambdas.X
-
-def wsum_tune_combination_newsvendor(target_y, prob_vectors, brc_predictor = [], type_ = 'convex_comb', 
-                                crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
-
-    'Takes input prob. vectors, optimizes the forecast combination parameters, returns list of coordinates, simple weighted combination of problem'
-
-    ### Find optimal decisions under perfect foresight information
-    print('Derive decisions under perfect information...')
-    z0_opt = []
-    for y0 in support:
-        # solve problem with perfect information forecast
-        # !!!! This should call a generic opt. function
-        z0_opt.append(y0)
-    z0_opt = np.array(z0_opt)
-    
-    #### set optimization problem
-    n_obs = prob_vectors[0].shape[0]
-    n_models = len(prob_vectors)
-    
-    m = gp.Model()
-    if verbose == 0: 
-        m.setParam('OutputFlag', 0)
-    # Decision variables
-    lambdas = m.addMVar(n_models, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    p_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-    lambdas.Start = (1/n_models)*np.ones(n_models)
-    
-    error = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    loss_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-    z = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    if bounds:
-        m.addConstr( z <= 1)
-        m.addConstr( z >= 0)
-        
-    m.addConstr( lambdas.sum() == 1)
-    # constraints on probability
-    #m.addConstr( p_comb.sum(1) == 1)
-    
-    if type_ == 'convex_comb':
-        m.addConstr( p_comb == sum([prob_vectors[i]*lambdas[i] for i in range(n_models)]) )
-        
-    elif type_ == 'barycenter':
-        # create inverted cdfs
-        target_quantiles = np.arange(0,1+.01,.01)
-        prob_inv = [np.array([inverted_cdf(target_quantiles, support, w = p[i]) for i in range(n_obs)]) for p in prob_vectors ]
-
-        # upper/lower bound for inverse correspond to bound on wind production, not quantiles
-        p_comb_inv = m.addMVar(prob_inv[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-
-        ### quantile averaging
-        m.addConstr( p_comb.sum(1) == 1)
-        m.addConstr( p_comb_inv == sum([prob_inv[i]*lambdas[i] for i in range(n_models)]))
-        
-        ### mapping from inverse c.d.f. (quantile function) to prob. vector (p.d.f.)
-        add_predictor_constr(m, brc_predictor, p_comb_inv, p_comb, epsilon = 1e-6)
-        
-    ### mapping probability vectors to decisions (replace with trained ML predictor for complex problems)/ simple weighted sum of decisions
-    m.addConstr( error == target_y - z)
-    
-    m.addConstr( z == p_comb@z0_opt)
-
-    # Task-loss function
-    m.addConstr( error == target_y - z)
-    m.addConstr( loss_i >= crit_fract*error)
-    m.addConstr( loss_i >= (crit_fract-1)*error)
-
-    m.setObjective( loss_i.sum()/n_obs, gp.GRB.MINIMIZE)
-    m.optimize()
-    
-    return lambdas.X
-
-def adapt_combination_newsvendor(target_y, X, prob_vectors, ml_predictor, brc_predictor = [], type_ = 'convex_comb', 
-                                crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
-
-    'Learns a policy that maps contextual information to forecast combination weights'
-    #### set optimization problem
-    n_obs = prob_vectors[0].shape[0]
-    n_feat = X.shape[1]
-    n_models = len(prob_vectors)
-    
-    m = gp.Model()
-    if verbose == 0: 
-        m.setParam('OutputFlag', 0)
-    # Decision variables
-    
-    lambdas = m.addMVar((n_obs, n_models), vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-    coef_ = m.addMVar((n_models, n_feat), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    inter_ = m.addMVar(n_models, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-
-    p_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-    #lambdas.Start = (1/n_models)*np.ones(n_models)
-
-    error = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    loss_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-    z = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    if bounds:
-        m.addConstr( z <= 1)
-        m.addConstr( z >= 0)
-        
-    m.addConstr( lambdas.sum(1) == 1)
-    
-    m.addConstrs( lambdas[i] == coef_@X[i] + inter_ for i in range(n_obs))
-
-    # constraints on probability
-    #m.addConstr( p_comb.sum(1) == 1)
-    
-    if type_ == 'convex_comb':
-        m.addConstrs( p_comb[i] == sum([prob_vectors[j][i]*lambdas[i,j] for j in range(n_models)])  for i in range(n_obs) )
-        
-    elif type_ == 'barycenter':
-        # create inverted cdfs
-        target_quantiles = np.arange(0,1+.01,.01)
-        prob_inv = [np.array([inverted_cdf(target_quantiles, support, w = p[i]) for i in range(n_obs)]) for p in prob_vectors ]
-
-        # upper/lower bound for inverse correspond to bound on wind production, not quantiles
-        p_comb_inv = m.addMVar(prob_inv[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-
-        ### quantile averaging
-        m.addConstr( p_comb.sum(1) == 1)
-        m.addConstr( p_comb_inv == sum([prob_inv[i]*lambdas[i] for i in range(n_models)]))
-        
-        ### mapping from inverse c.d.f. (quantile function) to prob. vector (p.d.f.)
-        add_predictor_constr(m, brc_predictor, p_comb_inv, p_comb, epsilon = 1e-6)
-        
-    ### mapping probability vectors to decisions (replace with trained ML predictor for complex problems)
-    pred_constr = add_predictor_constr(m, ml_predictor, p_comb, z, epsilon = 1e-6)
-    #pred_constr = add_decision_tree_regressor_constr(m, dt_model, p_comb, z, epsilon = .1e-6)
-    pred_constr.print_stats()
-
-    # Task-loss function
-    m.addConstr( error == target_y - z)
-    m.addConstr( loss_i >= crit_fract*error)
-    m.addConstr( loss_i >= (crit_fract-1)*error)
-
-    m.setObjective( loss_i.sum()/n_obs, gp.GRB.MINIMIZE)
-    m.optimize()
-    
-    return coef_.X, inter_.X
-
-def tune_combination_newsvendor(target_y, prob_vectors, ml_predictor, brc_predictor = [], type_ = 'convex_comb', 
-                                crit_fract = 0.5, support = np.arange(0, 1.01, .01).round(2), bounds = False, verbose = 0):
-
-    'Takes input prob. vectors, optimizes the forecast combination parameters, returns list of coordinates'
-    #### set optimization problem
-    n_obs = prob_vectors[0].shape[0]
-    n_models = len(prob_vectors)
-    
-    m = gp.Model()
-    if verbose == 0: 
-        m.setParam('OutputFlag', 0)
-    # Decision variables
-    lambdas = m.addMVar(n_models, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    p_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-    lambdas.Start = (1/n_models)*np.ones(n_models)
-    
-    error = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    loss_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-    z = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-    if bounds:
-        m.addConstr( z <= 1)
-        m.addConstr( z >= 0)
-        
-    m.addConstr( lambdas.sum() == 1)
-    # constraints on probability
-    #m.addConstr( p_comb.sum(1) == 1)
-    
-    if type_ == 'convex_comb':
-        m.addConstr( p_comb == sum([prob_vectors[i]*lambdas[i] for i in range(n_models)]) )
-        
-    elif type_ == 'barycenter':
-        # create inverted cdfs
-        target_quantiles = np.arange(0,1+.01,.01)
-        prob_inv = [np.array([inverted_cdf(target_quantiles, support, w = p[i]) for i in range(n_obs)]) for p in prob_vectors ]
-
-        # upper/lower bound for inverse correspond to bound on wind production, not quantiles
-        p_comb_inv = m.addMVar(prob_inv[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-
-        ### quantile averaging
-        m.addConstr( p_comb.sum(1) == 1)
-        m.addConstr( p_comb_inv == sum([prob_inv[i]*lambdas[i] for i in range(n_models)]))
-
-        ########################################
-        ### piecewise linear constraint for inverse cdf function
-        '''
-        y_supp_aux = m.addMVar(support.shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-        p_comb_cdf = m.addMVar(p_comb.shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-        
-        aux_cdf = [[m.addVar(vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1) for j in range(len(support))] for i in range(nobs)]
-        aux_inv = [[m.addVar(vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1) for j in range(len(support))] for i in range(nobs)]
-        
-        for i in range(nobs):
-            for j in range(len(support)):
-                m.addGenConstrPWL(y_supp_aux[j], aux_cdf[i][j], aux_inv[i], target_quantiles, "myPWLConstr")    
-            
-                m.addConstr( aux_cdf[i][j] == p_comb_cdf[i,j] )
-                m.addConstr( aux_inv[i][j] == p_comb_inv[i,j] )
-
-        m.addConstr( y_supp_aux == support)
-        
-        ### turn c.d.f. to prob. vector
-        m.addConstrs( p_comb[:,j] == p_comb_cdf[:,j]-p_comb_cdf[:,j-1] for j in range(1,len(support)))
-        m.addConstr( p_comb[:,0] == p_comb_cdf[:,0])
-        '''
-        ########################################
-        
-        ### mapping from inverse c.d.f. (quantile function) to prob. vector (p.d.f.)
-        add_predictor_constr(m, brc_predictor, p_comb_inv, p_comb, epsilon = 1e-6)
-        
-    ### mapping probability vectors to decisions (replace with trained ML predictor for complex problems)
-    #pred_constr = add_random_forest_regressor_constr(m, rf_model, p_comb, z, epsilon = 1e-6)
-    #pred_constr = add_predictor_constr(m, rf_model, p_comb, z, epsilon = 1e-6)
-    pred_constr = add_predictor_constr(m, ml_predictor, p_comb, z, epsilon = 1e-6)
-    #pred_constr = add_decision_tree_regressor_constr(m, dt_model, p_comb, z, epsilon = .1e-6)
-    pred_constr.print_stats()
-
-    # Task-loss function
-    m.addConstr( error == target_y - z)
-    m.addConstr( loss_i >= crit_fract*error)
-    m.addConstr( loss_i >= (crit_fract-1)*error)
-
-    m.setObjective( loss_i.sum()/n_obs, gp.GRB.MINIMIZE)
-    m.optimize()
-    
-    return lambdas.X
-
-def tree_params():
-    ''' Hyperparameters for tree algorithms'''
-    params = {}
-    params['n_estimators'] = 50
-    params['n_min'] = 2
-    params['max_features'] = 1
-    return params
-
-#def create_data_loader(X, Y, batch_size = 64, shuffle = True):
-#    dataset = torch.utils.data.TensorDataset(X,Y)
-#    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
@@ -709,6 +450,15 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
     elif problem =='mse':
         return (target_scen@weights)
  
+
+def tree_params():
+    ''' Hyperparameters for tree algorithms'''
+    params = {}
+    params['n_estimators'] = 50
+    params['n_min'] = 2
+    params['max_features'] = 1
+    return params
+
 def nn_params():
     'NN hyperparameters'
     nn_params = {}
@@ -729,16 +479,16 @@ def params():
     params['split_date_comb'] = '2014-01-01' # Defines train/test split
     params['end_date'] = '2014-07-01'
     
-    params['save'] = True # If True, then saves models and results
-    
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [1]
-        
+    params['target_zone'] = [1] # select solar plant from GEFCom2014 data set
+    
+    # Problem parameters        
     params['crit_quant'] = np.arange(0.1  , 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
+    params['save'] = False # If True, then saves models and results
     params['train_static'] = True
     params['train_adaptive'] = True
     
@@ -752,7 +502,6 @@ nn_hparam = nn_params()
 
 results_path = f'{cd}\\results\\solar_new_results'
 data_path = f'{cd}\\data'
-
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
 #%% Data pre-processing
@@ -791,12 +540,6 @@ for col in ['SSRD', 'STRD', 'TSR', 'TP']:
         
 aggr_df = aggr_df.interpolate()
 aggr_df = aggr_df.dropna()
-
-
-#target_scaler = MinMaxScaler()
-#pred_scaler = MinMaxScaler()
-
-#%%
 
 aggr_df['Hour'] = aggr_df.index.hour
 aggr_df['Month'] = aggr_df.index.month
@@ -850,7 +593,7 @@ n_obs = len(comb_trainY)
 n_test_obs = len(testY)
 
 #%%
-### NN hyperparameters
+### Gradient algorithm and NN-model hyperparameters
 patience = nn_hparam['patience']
 batch_size = nn_hparam['batch_size']
 num_epochs = nn_hparam['num_epochs']
@@ -868,7 +611,7 @@ except:
     mean_QS = pd.DataFrame()
 
 #%%
-
+# Iterate over combinations of problem parameters (for a single power plant)
 for tup in tuple_list[row_counter:]:
 
     target_zone = tup[0]    
@@ -880,7 +623,8 @@ for tup in tuple_list[row_counter:]:
     np.random.seed(1234)
 
     if row_counter == 0:        
-        #### Train different probabilistic forecasting models/ only train for first iteration    
+        
+        ###### Train expert forecasting models, derive component forecasts (only required for the first iteration)
     
         # store predictions
         train_w_dict = {}
@@ -944,13 +688,12 @@ for tup in tuple_list[row_counter:]:
     
         train_w_dict['rf'] = forest_find_weights(trainX_weather, comb_trainX_weather, rf_model)
         test_w_dict['rf'] = forest_find_weights(trainX_weather, testX_weather, rf_model)
-        #%%
-        #
+
         ## Climatology forecast
         #train_w_dict['clim'] = np.ones((comb_trainY.shape[0], trainY.shape[0]))*(1/len(trainY))
         #test_w_dict['clim'] = np.ones((testY.shape[0], trainY.shape[0]))*(1/len(trainY))
         
-        # Translate weighted observations to discrete PDFs
+        # Map weighted historical observations to weights of discrete PDF support
         train_p_list = []
         test_p_list = []
     
@@ -977,8 +720,8 @@ for tup in tuple_list[row_counter:]:
             CRPS = np.square(temp_CDF - H_i).mean()
     
             print(f'{m}:{CRPS}')
-        #%%
-        # estimate QS
+
+        # Evaluate probabilistic forecast using Quantile Score 
         print('QS')
         target_quant = np.arange(.01, 1, .01)
         for j,m in enumerate(all_learners):
@@ -995,7 +738,7 @@ for tup in tuple_list[row_counter:]:
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         plt.savefig(f'{cd}\\plots\\quantile_score_solar_forecast.pdf')
         plt.show()
-        #%%
+
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -1009,13 +752,7 @@ for tup in tuple_list[row_counter:]:
         plt.legend()
         plt.show()
         
-        
-        ### Define the rest of the supervised learning parameters     
-        # projection step (used for gradient-based methods)
-        
-        #y_proj = cp.Variable(N_experts)
-        #y_hat = cp.Parameter(N_experts)
-        #proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(y_proj-y_hat)), [y_proj >= 0, y_proj.sum()==1])
+
         N_experts = len(all_learners)
     #%%
     train_targetY = comb_trainY.values.reshape(-1)
@@ -1058,35 +795,38 @@ for tup in tuple_list[row_counter:]:
 
     ###########% Static forecast combinations
     lambda_static_dict = {}
-        
+    
+    
     for i,learner in enumerate(all_learners):
         temp_ind = np.zeros(N_experts)
         temp_ind[i] = 1
         lambda_static_dict[f'{learner}'] = temp_ind
-        
+    
+    # Ordinary linear pooling
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
     
-    # Set weights to in-sample performance
+    # Inverse Performance-based weights (invW in the paper)
     lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, problem = target_problem,
                                                  crit_quant = critical_fractile, 
                                                  support = y_supp, risk_aversion = risk_aversion)
     
+    lambda_static_dict['Insample'] = lambda_tuned_inv    
+
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
+    # *** This method is not presented in the paper ***
     lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile,
                                   support = y_supp, bounds = False, risk_aversion = risk_aversion)
 
-    lambda_static_dict['Insample'] = lambda_tuned_inv    
     lambda_static_dict['SalvaBench'] = lambda_
 
     
-    #% CRPS learning
-    
+    ###### CRPS learning (optimized once)
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
     
     if row_counter == 0:
-        #### CRPS minimization/ with torch layer
+        #### CRPS minimization using gradient-based approach
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                apply_softmax = True)
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
@@ -1105,7 +845,7 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['CRPS'] = lambda_crps
     
     #%%
-    ##### Decision-focused combination for different values of gamma  
+    ##### Decision-focused learning combination for different values of gamma  
     from torch_layers_functions import *
       
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512)
@@ -1114,6 +854,7 @@ for tup in tuple_list[row_counter:]:
     num_epochs = 100
     patience = 10
     
+    # Iterate over values of hyperparameter \gamma
     for gamma in config['gamma_list']:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -1134,15 +875,13 @@ for tup in tuple_list[row_counter:]:
     plt.legend()
     plt.show()
     
+    # save static combination weights as dataframe
     if config['save']:
-        #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
         lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static.csv')
 
     #%%
-    ### Adaptive combination model    
-    # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
-    # iv) create one for CRPS only (gamma == +inf)
+    ### Adaptive/ Conditional combination models: combination weights depend on additional contextual information
     
     train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
     valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size)
@@ -1157,7 +896,7 @@ for tup in tuple_list[row_counter:]:
     num_epochs = 500
 
     if adapt_models:
-        ### CRPS/ Linear Regression
+        ### CRPS Learning - Linear Regression
         lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
                                                           support = torch.FloatTensor(y_supp))        
         optimizer = torch.optim.Adam(lr_lpool_crps_model.parameters(), lr = learning_rate)        
@@ -1166,7 +905,7 @@ for tup in tuple_list[row_counter:]:
     
         adaptive_models_dict['CRPS-LR'] = lr_lpool_crps_model
     
-        ### CRPS/ MLP learner
+        ### CRPS Learning - Neural Net model (MLP)
         
         mlp_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], output_size = N_experts, support = torch.FloatTensor(y_supp))        
         optimizer = torch.optim.Adam(mlp_lpool_crps_model.parameters(), lr = learning_rate)        
@@ -1175,7 +914,7 @@ for tup in tuple_list[row_counter:]:
     
         adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
     
-        ### Decision Combination/ LR
+        ### Conditional combination of weighted decisions ***these do not appear in the paper***
         train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
         valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size)
     
@@ -1195,7 +934,7 @@ for tup in tuple_list[row_counter:]:
     
         adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
         
-        #%
+        ### Decision Combination Learning - Linear Regression + MLP models over all values of gamma
         for gamma in config['gamma_list']:
                         
             lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
@@ -1219,8 +958,8 @@ for tup in tuple_list[row_counter:]:
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
     
-    #% Evaluate performance for all models
-    #%
+    #%% Performance evaluation
+
     static_models = list(lambda_static_dict) 
     adaptive_models = list(adaptive_models_dict.keys())
     all_models = static_models + adaptive_models
@@ -1259,13 +998,11 @@ for tup in tuple_list[row_counter:]:
         print(m)
             
         # Estimate task-loss for specific model
-        #%
         temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY.values, 
                                           target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
-        #%
-        print(m)
-        
-        # Evaluate QS (approximation of CRPS) for each model
+
+        print(m)        
+        # Evaluate Quantile Score and CRPS for combined forecasts
         # find quantile forecasts
         temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
         temp_qs = 100*pinball(temp_q_forecast, testY.values, target_quant).round(4)
@@ -1284,7 +1021,8 @@ for tup in tuple_list[row_counter:]:
 
     print('CRPS')
     print(temp_mean_QS[all_models].mean().round(4))
-            
+    
+    # save results
     try:
         Decision_cost = pd.concat([Decision_cost, temp_Decision_cost], ignore_index = True)            
         QS_df = pd.concat([QS_df, temp_QS], ignore_index = True)        
