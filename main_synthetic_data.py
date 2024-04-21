@@ -20,6 +20,7 @@ from optimal_transport_functions import *
 from torch_layers_functions import *
 from torch.utils.data import Dataset, DataLoader
 import torch
+from torch_layers_functions import *
 
 from scipy.stats import norm
 
@@ -31,50 +32,6 @@ plt.rcParams['font.size'] = 7
 plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
-
-def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.01, .01).round(2), verbose = 0):
-
-    'Linear pool minimizing the CRPS, returns the combination weights'
-    
-    #### set optimization problem
-    n_obs = prob_vectors[0].shape[0]
-    n_locs = len(support)
-    n_experts = len(prob_vectors)
-    
-    m = gp.Model()
-    if verbose == 0: 
-        m.setParam('OutputFlag', 0)
-    m.setParam('BarHomogeneous', 1)
-        
-    # Decision variables
-    lambdas = m.addMVar(n_experts, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    p_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    CDF_comb = m.addMVar(prob_vectors[0].shape, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
-    
-    lambdas.Start = (1/n_experts)*np.ones(n_experts)
-    
-    crps_i = m.addMVar(n_obs, vtype = gp.GRB.CONTINUOUS, lb = 0)
-    # Heavyside function for each observation
-    H_i = 1*np.repeat(support.reshape(1,-1), n_obs, axis = 0) >= target_y.reshape(-1,1)
-
-    # Linear pool
-    m.addConstr( p_comb == sum([prob_vectors[i]*lambdas[i] for i in range(n_experts)]) )
-    m.addConstr( lambdas.sum() == 1 )
-
-    # PDF to CDF
-    m.addConstrs( CDF_comb[:,j] == p_comb[:,:j+1].sum(1) for j in range(n_locs))
-    print('check1')
-    # CRPS for each observation i
-    
-    #m.addConstrs( crps_i[i] >= (CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i]) for i in range(n_obs))
-    print('check2')
-    
-    #crps_i = (CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i])
-    #print(crps_i)
-    m.setObjective( sum([(CDF_comb[i] - H_i[i])@(CDF_comb[i] - H_i[i]) for i in range(n_obs)])/n_obs, gp.GRB.MINIMIZE)
-    m.optimize()
-    
-    return lambdas.X
 
 def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
@@ -405,7 +362,7 @@ def params():
 
     params = {}
     
-    params['save'] = True # If True, then saves models and results
+    params['save'] = False # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
@@ -437,10 +394,6 @@ bias_term = 15
 y_supp = np.arange(-15, 7, 0.1).round(1) + bias_term
 n_locs = len(y_supp)
 target_quant = np.arange(0.01, 1, 0.01).round(2)
-
-#alpha_1 = 1.2
-#alpha_2 = 1.2
-#alpha_3 = 4
 
 alpha_1 = 1.2
 alpha_2 = 1.2
@@ -539,9 +492,7 @@ patience = 10
 
 train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
 
-from torch_layers_functions import *
-
-#### CRPS minimization/ with torch layer
+#### CRPS Learning, gradient-based approach with torch layer
 lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                        apply_softmax = True)
 optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
@@ -554,13 +505,12 @@ lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
 print(lambda_crps)
 #lambda_crps = crps_learning_combination(Y_tail, [p1_hat, p2_hat], support = y_supp, verbose = 1)
 lambda_static_dict['CRPS'] = lambda_crps
-#%% Decision-focused combination 
+#%% Decision-focused learning
 
 # optimization problem parameters
 target_problem = config['problem']
 critical_fractile = 0.2
 regularization = 0.01 # to help convergence of the gradient-descent
-
 
 # Optimizer hyperparameters
 batch_size = 500
@@ -568,6 +518,7 @@ learning_rate = 1e-2
 num_epochs = 100
 patience = 5
 
+# iterate over values of gamma
 for gamma in [0]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -591,26 +542,17 @@ for j in range(N_experts):
                                 crit_quant = critical_fractile)
     trainZopt[:,j] = temp_z_opt
     
-# Set weights to in-sample performance
+# Inverse Performance-based weights (invW)
 lambda_tuned_inv, _ = insample_weight_tuning(Y_train, trainZopt, problem = target_problem,
                                              crit_quant = critical_fractile, support = y_supp, risk_aversion = regularization)
 lambda_static_dict['Insample'] = lambda_tuned_inv    
 
 
-# Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
-#lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile, support = y_supp, bounds = False, risk_aversion = risk_aversion)
-#lambda_static_dict['SalvaBench'] = lambda_
-
-
-#%%
 for m in list(lambda_static_dict.keys()):
     plt.plot(lambda_static_dict[m], label = m)
 plt.legend()
 plt.show()
 
-#lambda_static_dict[f'DF_{gamma}'] = np.array([0.39, 0.57])
-#lambda_static_dict[f'DF_{gamma}'] = np.array([0.4648, 0.5352])
-#lambda_static_dict['Ave'] = np.array([0.5, 0.5])
 #%% Evaluate results
 #regularization = 0.01
 all_models = lambda_static_dict.keys()
@@ -647,7 +589,6 @@ for j, m in enumerate(all_models):
     #%
     temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, Y_test, 
                                       target_problem, crit_quant = critical_fractile, risk_aversion = regularization)
-    #%
     
     # Evaluate QS (approximation of CRPS) for each model
     # find quantile forecasts
