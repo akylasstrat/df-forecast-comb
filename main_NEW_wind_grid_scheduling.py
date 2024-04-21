@@ -463,7 +463,7 @@ def params():
     params['end_date'] = '2014-01-01'
 
     
-    params['save'] = True # If True, then saves models and results
+    params['save'] = False # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
@@ -472,7 +472,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.001, 0.01]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 4
+    params['target_ieee_case'] = 0
     
     params['train_static'] = True
     
@@ -568,7 +568,7 @@ if dataset == 'wind':
     
         
 elif dataset == 'solar':
-        
+    # ** This runs the grid scheduling problem using solar instead of wind (not included in the paper) **
     aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
 
     config['start_date'] = '2012-01-01'
@@ -951,7 +951,8 @@ for tup in tuple_list[row_counter:]:
         print(m)
 
         temp_mean_QS[m] = temp_qs.mean()
-        
+    
+    # Estimate cost of perfect foresight solution
     perfect_foresight_DA_cost = perfect_scheduling_cost(grid, testY.values)
     temp_DA_cost['Perfect'] = perfect_foresight_DA_cost
     temp_RT_cost['Perfect'] = 0
