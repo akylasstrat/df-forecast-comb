@@ -33,15 +33,15 @@ Notably, optimizing for a combination of downstream cost and a standard scoring 
 ## Citation
 Please use the following reference:
 
-```@unpublished{stratigakos:hal-04268454,
-  TITLE = {{Decision-Focused Data Pooling for Contextual Stochastic Optimization}},
-  AUTHOR = {Stratigakos, Akylas and Morales, Juan Miguel and Pineda, Salvador and Kariniotakis, Georges},
-  URL = {https://hal.science/hal-04268454},
+```@unpublished{stratigakos:hal-04593114,
+  TITLE = {{Decision-Focused Probabilistic Forecast Combination}},
+  AUTHOR = {Stratigakos, Akylas and Pineda, Salvador and Morales, Juan Miguel},
+  URL = {https://hal.science/hal-04593114},
   NOTE = {working paper or preprint},
-  YEAR = {2023},
-  MONTH = Nov,
-  KEYWORDS = {Decision support systems contextual stochastic optimization prescriptive analytics data pooling ; Decision support systems ; contextual stochastic optimization ; prescriptive analytics ; data pooling},
-  PDF = {https://hal.science/hal-04268454/file/data-pooling-main.pdf},
-  HAL_ID = {hal-04268454},
+  YEAR = {2024},
+  MONTH = May,
+  KEYWORDS = {Probabilistic forecasting ; Forecast combination ; Decision-focused learning ; Prescriptive analytics ; Linear pool ; Differentiable optimization},
+  PDF = {https://hal.science/hal-04593114/file/submitted_Forecast_combination.pdf},
+  HAL_ID = {hal-04593114},
   HAL_VERSION = {v1},
-}```
+}
