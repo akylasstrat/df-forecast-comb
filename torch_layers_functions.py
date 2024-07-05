@@ -460,7 +460,8 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         
 class LinearPoolNewsvendorLayer(nn.Module):        
     def __init__(self, num_inputs, support, 
-                 gamma, problem = 'reg_trad', apply_softmax = False, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
+                 gamma, problem = 'reg_trad', apply_softmax = False, projection_simplex = True, 
+                 critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
         super(LinearPoolNewsvendorLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -471,10 +472,12 @@ class LinearPoolNewsvendorLayer(nn.Module):
         self.risk_aversion = risk_aversion
         self.gamma = gamma
         self.apply_softmax = apply_softmax
+        self.projection_simplex = projection_simplex
         self.regularizer = regularizer
         self.crit_fract = critic_fract
         self.problem = problem
-        if (self.problem == 'newsvendor'): self.risk_aversion = 0
+        if (self.problem == 'newsvendor'): 
+            self.risk_aversion = 0
 
         n_locations = len(self.support)
         
@@ -527,6 +530,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
             self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
                                                variables = [z, pwl_loss, error] )
 
+
     def forward(self, list_inputs):
         """
         Forward pass of the newvendor layer.
@@ -538,7 +542,9 @@ class LinearPoolNewsvendorLayer(nn.Module):
             torch.Tensor: The convex combination of input tensors/ combination of PDFs.
         """
         # Ensure that the weights are in the range [0, 1] using softmax activation
-        if self.apply_softmax:
+        if self.projection_simplex:
+            weights = self.simplex_projection(self.weights)            
+        elif self.apply_softmax:
             weights = torch.nn.functional.softmax(self.weights, dim = 0)
         else:
             weights = self.weights
@@ -555,14 +561,48 @@ class LinearPoolNewsvendorLayer(nn.Module):
             
         return combined_pdf, cvxpy_output
     
+    def simplex_projection(self, w_init):
+        """
+        Projection to unit simplex, closed-form solution
+        Ref: Wang, Weiran, and Miguel A. Carreira-Perpinán. "Projection onto the probability simplex: An efficient algorithm with a simple proof, and an application." arXiv preprint arXiv:1309.1541 (2013).
+        """
+
+        u_sorted, indices = torch.sort(w_init, descending = True)
+        j_ind = torch.arange(1, self.num_inputs + 1)
+        rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
+        dual_mu = 1/rho*(1-u_sorted[:rho].sum())
+        
+        w_proj = torch.maximum(w_init + dual_mu, torch.zeros_like(w_init))
+        return w_proj
+    
+    # def epoch_train(self, loader, opt=None):
+    #     """Standard training/evaluation epoch over the dataset"""
+    #     total_loss = 0.
+        
+    #     for X,y in loader:
+            
+    #         y_hat = self.forward(X)
+            
+    #         #loss = nn.MSELoss()(yp,y)
+    #         loss_i = self.estimate_loss(y_hat, y)                    
+    #         loss = torch.mean(loss_i)
+            
+    #         if opt:
+    #             opt.zero_grad()
+    #             loss.backward()
+    #             opt.step()
+    #         total_loss += loss.item() * X.shape[0]
+            
+    #     return total_loss / len(loader.dataset)
+    
     def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
                     relative_tolerance = 0):
         # define projection problem for backward pass
 
-        if (projection)and(self.apply_softmax != True):     
-            lambda_proj = cp.Variable(self.num_inputs)
-            lambda_hat = cp.Parameter(self.num_inputs)
-            proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
+        # if (projection)and(self.apply_softmax != True):     
+        #     lambda_proj = cp.Variable(self.num_inputs)
+        #     lambda_hat = cp.Parameter(self.num_inputs)
+        #     proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
         
         
         L_t = []
@@ -662,13 +702,17 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 loss.backward()
                 optimizer.step()
                 
-                # Apply projection
-                if (projection)and(self.apply_softmax != True):     
-                    lambda_hat.value = to_np(self.weights)
-                    proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
+                # Projection to unit simplex
+                # print(self.weights)
+                if self.projection_simplex == True:
+                    w_proj = self.simplex_projection(self.weights.clone())
                     with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
+                        self.weights.copy_(torch.FloatTensor(w_proj))
+                # print(self.weights)
+                # if (projection)and(self.apply_softmax != True):     
+                #     lambda_hat.value = to_np(self.weights)
+                #     proj_problem.solve(solver = 'GUROBI')
+                    # update parameter values
                 
                 running_loss += loss.item()
                 

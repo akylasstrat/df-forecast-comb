@@ -490,7 +490,7 @@ def params():
 
     params['save'] = False # If True, then saves models and results
     params['train_static'] = True
-    params['train_adaptive'] = True
+    params['train_adaptive'] = False
     
     return params
 
@@ -609,6 +609,33 @@ except:
     Decision_cost = pd.DataFrame()
     QS_df = pd.DataFrame()
     mean_QS = pd.DataFrame()
+
+#%% Projection test
+
+# w = torch.FloatTensor([-2, 0.4, 0.5])
+
+# u_sorted, indices = torch.sort(w, descending = True)
+# j_ind = torch.arange(1, w.shape[0] + 1)
+# rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
+# dual_mu = 1/rho*(1-u_sorted[:rho].sum())
+
+# y_proj = torch.maximum(w + dual_mu, torch.zeros_like(w))
+
+# m = gp.Model()            
+# m.setParam('OutputFlag', 0)
+
+# # variables
+# w_proj = m.addMVar(w.shape[0], vtype = gp.GRB.CONTINUOUS, lb = 0)
+
+# # constraints
+# m.addConstr(w_proj.sum() == 1)
+# m.setObjective( (w_proj - w.detach().numpy())@(w_proj - w.detach().numpy()), gp.GRB.MINIMIZE)
+
+# m.optimize()
+
+# print(f'Original:{w}')
+# print(f'Closed-form:{y_proj}')
+# print(f'Gurobi{w_proj.X}')
 
 #%%
 # Iterate over combinations of problem parameters (for a single power plant)
@@ -847,7 +874,8 @@ for tup in tuple_list[row_counter:]:
     #%%
     ##### Decision-focused learning combination for different values of gamma  
     from torch_layers_functions import *
-      
+     
+    
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512)
     
