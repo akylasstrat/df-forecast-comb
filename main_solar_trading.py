@@ -839,7 +839,7 @@ for tup in tuple_list[row_counter:]:
                                                  support = y_supp, risk_aversion = risk_aversion)
     
     lambda_static_dict['Insample'] = lambda_tuned_inv    
-
+    #%%
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
     # *** This method is not presented in the paper ***
     lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile,
@@ -847,7 +847,7 @@ for tup in tuple_list[row_counter:]:
 
     lambda_static_dict['SalvaBench'] = lambda_
 
-    
+    #%%    
     ###### CRPS learning (optimized once)
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
