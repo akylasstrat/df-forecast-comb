@@ -470,7 +470,7 @@ import torch
 A = np.random.uniform(size=(2))
 B = np.random.normal(size=(2))
 C = np.random.uniform(size=(2))
-
+#%%
 w = torch.FloatTensor(np.random.normal(loc = 0.5, scale = 0.5, size=(3)))
 
 u_sorted, indices = torch.sort(w, descending = True)
@@ -478,12 +478,14 @@ j_ind = torch.arange(1, w.shape[0] + 1)
 rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
 dual_mu = 1/rho*(1-u_sorted[:rho].sum())
 
-y_proj = torch.maximum(w + dual_mu, torch.zeros_like(w))
+w_proj = torch.maximum(w + dual_mu, torch.zeros_like(w))
 
-
+z = w_proj[0]*A + w_proj[1]*B + w_proj[2]*C
+ 
 plt.scatter(A[0],A[1])
 plt.scatter(B[0],B[1])
 plt.scatter(C[0],C[1])
+plt.scatter(z[0], z[1])
 plt.show()
 #%%
 # experiment parameters
