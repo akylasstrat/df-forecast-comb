@@ -504,7 +504,7 @@ config = params()
 hyperparam = tree_params()
 nn_hparam = nn_params()
 
-results_path = f'{cd}\\results\\solar_new_results'
+results_path = f'{cd}\\results\\solar_trading_results'
 data_path = f'{cd}\\data'
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
