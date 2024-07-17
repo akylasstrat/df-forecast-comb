@@ -34,7 +34,7 @@ class MyDataset(Dataset):
         return tuple(input_tensor[idx] for input_tensor in self.inputs)
 
 # Define a custom data loader
-def create_data_loader(inputs, batch_size, num_workers=0, shuffle=True):
+def create_data_loader(inputs, batch_size, num_workers=0, shuffle=False):
     dataset = MyDataset(*inputs)
     data_loader = DataLoader(
         dataset,
@@ -43,6 +43,22 @@ def create_data_loader(inputs, batch_size, num_workers=0, shuffle=True):
         shuffle=shuffle
     )
     return data_loader
+
+# Closed-form projection on the probability simplex
+
+def simplex_projection_func(torch_model, w_init):
+    """
+    Projection to unit simplex, closed-form solution
+    Ref: Wang, Weiran, and Miguel A. Carreira-Perpinán. "Projection onto the probability simplex: An efficient algorithm with a simple proof, and an application." arXiv preprint arXiv:1309.1541 (2013).
+    """
+
+    u_sorted, indices = torch.sort(w_init, descending = True)
+    j_ind = torch.arange(1, torch_model.num_inputs + 1)
+    rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
+    dual_mu = 1/rho*(1-u_sorted[:rho].sum())
+    
+    w_proj = torch.maximum(w_init + dual_mu, torch.zeros_like(w_init))
+    return w_proj
 
 class AdaptiveLinearPoolDecisions(nn.Module):        
     def __init__(self, input_size, hidden_sizes, output_size, 
@@ -459,8 +475,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
             return self.model(x).detach().numpy()
         
 class LinearPoolNewsvendorLayer(nn.Module):        
-    def __init__(self, num_inputs, support, 
-                 gamma, problem = 'reg_trad', apply_softmax = False, projection_simplex = True, 
+    def __init__(self, num_inputs, support, gamma, problem = 'reg_trad', projection_simplex = True, 
                  critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
         super(LinearPoolNewsvendorLayer, self).__init__()
 
@@ -471,7 +486,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
         self.support = support
         self.risk_aversion = risk_aversion
         self.gamma = gamma
-        self.apply_softmax = apply_softmax
+        # self.apply_softmax = apply_softmax
         self.projection_simplex = projection_simplex
         self.regularizer = regularizer
         self.crit_fract = critic_fract
@@ -542,15 +557,15 @@ class LinearPoolNewsvendorLayer(nn.Module):
             torch.Tensor: The convex combination of input tensors/ combination of PDFs.
         """
         # Ensure that the weights are in the range [0, 1] using softmax activation
-        if self.projection_simplex:
-            weights = self.simplex_projection(self.weights)            
-        elif self.apply_softmax:
-            weights = torch.nn.functional.softmax(self.weights, dim = 0)
-        else:
-            weights = self.weights
+        # if self.projection_simplex:
+        #     weights = self.simplex_projection(self.weights)            
+        # elif self.apply_softmax:
+        #     weights = torch.nn.functional.softmax(self.weights, dim = 0)
+        # else:
+        #     weights = self.weights
 
         # Apply the weights element-wise to each input tensor
-        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+        weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
 
         # Perform the convex combination across input vectors
         combined_pdf = sum(weighted_inputs)
@@ -595,7 +610,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
             
     #     return total_loss / len(loader.dataset)
     
-    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
+    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, validation = False, 
                     relative_tolerance = 0):
         # define projection problem for backward pass
 
@@ -605,140 +620,29 @@ class LinearPoolNewsvendorLayer(nn.Module):
         #     proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
         
         
-        L_t = []
-        best_train_loss = 1e7
-        best_val_loss = 1e7 
-        early_stopping_counter = 0
-        best_weights = copy.deepcopy(self.state_dict())
+        # L_t = []
+        # best_train_loss = 1e7
+        # best_val_loss = 1e7 
+        # early_stopping_counter = 0
+        # best_weights = copy.deepcopy(self.state_dict())
         
         print('Initialize loss...')
         
-        initial_loss = 0.0
-        # sample batch data
-        with torch.no_grad():
-            
-            for batch_data in train_loader:
+        best_train_loss = self.epoch_train(train_loader)
+        # best_train_loss = float('inf')
+        best_val_loss = float('inf')
+        early_stopping_counter = 0
+        best_weights = copy.deepcopy(self.state_dict())
                 
-                y_batch = batch_data[-1]
-                                
-                # forward pass: combine forecasts and solve each newsvendor problem
-                output_hat = self.forward(batch_data[:-1])
-
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
-                
-                z_hat = output_hat[1][0]
-                
-                # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
-                error_hat = (y_batch.reshape(-1,1) - z_hat)
-                
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                sql2_loss = torch.square(error_hat).sum()
-                
-                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1)
-                                    + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
-                    
-                    # Total regret (scale CRPS for better trade-off control)
-                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                        + self.gamma*crps_i/len(self.support)
-
-                elif self.problem == 'pwl':
-                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum( (-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
-
-                    # Total regret (scale CRPS for better trade-off control)
-                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
-                    
-                initial_loss += loss.item()
-                                        
-        best_train_loss = initial_loss/len(train_loader)
-        print(f'Initial loss: {best_train_loss}')
-        
         for epoch in range(epochs):
-            # activate train functionality
-            self.train()
-            running_loss = 0.0
-            # sample batch data
-            for batch_data in train_loader:
-                
-                y_batch = batch_data[-1]
-                
-                # clear gradients
-                optimizer.zero_grad()
-                
-                # forward pass: combine forecasts and solve each newsvendor problem
-                #start = time.time()
-                output_hat = self.forward(batch_data[:-1])
-                #stop = time.time()
-                
-                #print('Forward pass time', stop-start)
-                
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
-                
-                z_hat = output_hat[1][0]
-                
-                # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
-                error_hat = (y_batch.reshape(-1,1) - z_hat)
-                
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                sql2_loss = torch.square(error_hat).sum()
-                
-                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-                    pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1)
-                                    + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
-                    
-                    # Total regret (scale CRPS for better trade-off control)
-                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                        + self.gamma*crps_i/len(self.support)
+            
+            print('Current weights')
+            print(self.weights)
+            
+            if validation == False:
+                # only check performance on training data
 
-                elif self.problem == 'pwl':
-                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum( (-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
-
-                    # Total regret (scale CRPS for better trade-off control)
-                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
-                    
-                # backward pass
-                loss.backward()
-                optimizer.step()
-                
-                # Projection to unit simplex
-                # print(self.weights)
-                if self.projection_simplex == True:
-                    w_proj = self.simplex_projection(self.weights.clone())
-                    with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(w_proj))
-                # print(self.weights)
-                # if (projection)and(self.apply_softmax != True):     
-                #     lambda_hat.value = to_np(self.weights)
-                #     proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
-                
-                running_loss += loss.item()
-                
-            if epoch%1 == 0:
-                print(torch.nn.functional.softmax(self.weights))
-                
-            average_train_loss = running_loss / len(train_loader)
-                                        
-            if validation == True:
-                # evaluate performance on stand-out validation set
-                val_loss = self.evaluate(val_loader)
-                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
-                
-                if (val_loss < best_val_loss) and ( (best_val_loss-val_loss)/best_val_loss > relative_tolerance):
-                    best_val_loss = val_loss
-                    best_weights = copy.deepcopy(self.state_dict())
-                    early_stopping_counter = 0
-                else:
-                    early_stopping_counter += 1
-                    if early_stopping_counter >= patience:
-                        print("Early stopping triggered.")
-                        # recover best weights
-                        self.load_state_dict(best_weights)
-                        return
-            else:
-                # only evaluate on training data set
+                average_train_loss = self.epoch_train(train_loader, optimizer)
                 print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
     
                 if (average_train_loss < best_train_loss) and ( (best_train_loss-average_train_loss)/best_train_loss > relative_tolerance):
@@ -753,50 +657,249 @@ class LinearPoolNewsvendorLayer(nn.Module):
                         # recover best weights
                         self.load_state_dict(best_weights)
                         return
+                    
+            elif validation == True:
+                
+                average_train_loss = self.epoch_train(train_loader, optimizer)
+                val_loss = self.epoch_train(val_loader)
+
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+    
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        break
                 
 
-    def evaluate(self, data_loader):
+
+        # initial_total_loss = 0.0
+        # # sample batch data
+        # with torch.no_grad():
+            
+        #     for batch_data in train_loader:
+                
+        #         y_batch = batch_data[-1]
+                                
+        #         # forward pass: combine forecasts and solve each newsvendor problem
+        #         output_hat = self.forward(batch_data[:-1])
+
+        #         pdf_comb_hat = output_hat[0]
+        #         cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+        #         z_hat = output_hat[1][0]
+                
+        #         # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
+        #         error_hat = (y_batch.reshape(-1,1) - z_hat)
+                
+        #         crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+        #         sql2_loss_i = torch.square(error_hat)
+                
+        #         if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
+        #             pinball_loss_i = torch.max(self.crit_fract*error_hat, (1-self.crit_fract)*error_hat)
+
+        #             # Total regret (scale CRPS for better trade-off control)
+        #             loss_i = (1-self.risk_aversion)*pinball_loss_i + self.risk_aversion*sql2_loss_i \
+        #                 + self.gamma*crps_i
+
+        #         # elif self.problem == 'pwl':
+        #         #     pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum( (-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+
+        #         #     # Total regret (scale CRPS for better trade-off control)
+        #         #     loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
+
+        #         loss = loss_i.mean()
+                    
+        #         initial_total_loss += loss.item() * y_batch.shape[0]
+                                        
+        # best_ave_train_loss = initial_total_loss/len(train_loader)
+        
+        # print(f'Initial loss: {best_ave_train_loss}')
+        
+        # for epoch in range(epochs):
+        #     # activate train functionality
+        #     self.train()
+        #     # running_loss = 0.0
+            
+        #     total_train_loss = 0
+
+        #     # sample batch data
+        #     for batch_data in train_loader:
+                
+        #         y_batch = batch_data[-1]
+                
+        #         # clear gradients
+        #         optimizer.zero_grad()
+                
+        #         # forward pass: combine forecasts and solve each newsvendor problem
+        #         #start = time.time()
+        #         output_hat = self.forward(batch_data[:-1])
+        #         #stop = time.time()
+                
+        #         #print('Forward pass time', stop-start)
+                
+        #         pdf_comb_hat = output_hat[0]
+        #         cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+        #         z_hat = output_hat[1][0]
+                
+        #         # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
+        #         error_hat = (y_batch.reshape(-1,1) - z_hat)
+                
+        #         crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+        #         sql2_loss_i = torch.square(error_hat)
+                
+        #         if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
+        #             pinball_loss_i = torch.max(self.crit_fract*error_hat, (1-self.crit_fract)*error_hat)
+        #             # pinball_loss = ( self.crit_fract*error_hat[error_hat>0].norm(p=1)
+        #             #                 + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1) )
+                    
+        #             # Total regret (scale CRPS for better trade-off control)
+        #             # loss_i = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
+        #             #     + self.gamma*crps_i/len(self.support)
+
+        #             # Total regret (scale CRPS for better trade-off control)
+        #             loss_i = (1-self.risk_aversion)*pinball_loss_i + self.risk_aversion*sql2_loss_i \
+        #                 + self.gamma*crps_i
+
+        #         # elif self.problem == 'pwl':
+        #         #     pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum( (-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
+
+        #         #     # Total regret (scale CRPS for better trade-off control)
+        #         #     loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
+                    
+        #         # backward pass
+            
+        #         loss = torch.mean(loss_i)
+        #         loss.backward()
+        #         optimizer.step()
+                
+        #         # Projection to unit simplex
+        #         # print(self.weights)
+        #         # if self.projection_simplex == True:
+
+        #         if self.projection_simplex == True:
+        #             w_proj = self.simplex_projection(self.weights.clone())
+        #             with torch.no_grad():
+        #                 self.weights.copy_(torch.FloatTensor(w_proj))
+                    
+        #         # print(self.weights)
+        #         # if (projection)and(self.apply_softmax != True):     
+        #         #     lambda_hat.value = to_np(self.weights)
+        #         #     proj_problem.solve(solver = 'GUROBI')
+        #             # update parameter values
+                
+        #         total_train_loss += loss.item() * y_batch.shape[0]
+                
+        #     # Average training loss of current epoch
+        #     average_train_loss = total_train_loss / len(train_loader)
+                                        
+        #     if validation == True:
+        #         # evaluate performance on stand-out validation set
+        #         val_loss = self.evaluate(val_loader)
+        #         print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+                
+        #         if (val_loss < best_val_loss) and ( (best_val_loss-val_loss)/best_val_loss > relative_tolerance):
+        #             best_val_loss = val_loss
+        #             best_weights = copy.deepcopy(self.state_dict())
+        #             early_stopping_counter = 0
+        #         else:
+        #             early_stopping_counter += 1
+        #             if early_stopping_counter >= patience:
+        #                 print("Early stopping triggered.")
+        #                 # recover best weights
+        #                 self.load_state_dict(best_weights)
+        #                 return
+        #     else:
+        #         # only evaluate on training data set
+        #         print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+    
+        #         if (average_train_loss < best_ave_train_loss) and ( (best_ave_train_loss-average_train_loss)/best_ave_train_loss > relative_tolerance):
+        #             best_ave_train_loss = average_train_loss
+        #             best_weights = copy.deepcopy(self.state_dict())
+        #             early_stopping_counter = 0
+                    
+        #         else:
+        #             early_stopping_counter += 1
+        #             if early_stopping_counter >= patience:
+        #                 print("Early stopping triggered.")
+        #                 # recover best weights
+        #                 self.load_state_dict(best_weights)
+        #                 return
+                
+    def epoch_train(self, data_loader, opt=None):
+        """Standard training/evaluation epoch over the dataset"""
         # evaluate loss criterion/ used for estimating validation loss
-        self.eval()
         total_loss = 0.0
-        with torch.no_grad():
-            for batch_data in data_loader:
-                y_batch = batch_data[-1]
 
-                # forward pass: combine forecasts and solve each newsvendor problem
-                output_hat = self.forward(batch_data[:-1])
+        for batch_data in data_loader:
+            y_batch = batch_data[-1]
 
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
+            # forward pass: combine forecasts and solve each newsvendor problem
+            output_hat = self.forward(batch_data[:-1])
+
+            pdf_comb_hat = output_hat[0]
+            cdf_comb_hat = pdf_comb_hat.cumsum(1)
+            
+            z_hat = output_hat[1][0]
                 
-                z_hat = output_hat[1][0]
+            # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
+            error_hat = (y_batch.reshape(-1,1) - z_hat)
+            
+            # crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+            crps_i = torch.sum(torch.square( cdf_comb_hat - 1*(self.support >= y_batch.reshape(-1,1))), 1).reshape(-1,1)
+
+            sql2_loss_i = torch.square(error_hat)
+            
+            if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
+                pinball_loss_i = torch.max(self.crit_fract*error_hat, (self.crit_fract-1)*error_hat)
+
+                # Total regret (scale CRPS for better trade-off control)
+                loss_i = (1-self.risk_aversion)*pinball_loss_i + self.risk_aversion*sql2_loss_i \
+                    + self.gamma*crps_i
+            
+            # print(crps_i.shape)
+            # print(sql2_loss_i.shape)
+            # print(pinball_loss_i.shape)
+            # print(loss_i.shape)
+            
+            # print(crps_i.mean())
+            # print(sql2_loss_i.mean())
+            # print(pinball_loss_i.mean())
+            # print(loss_i.mean())
+            
+            # print(crps_i.sum())
+            # print(sql2_loss_i.sum())
+            # print(pinball_loss_i.sum())
+            # print(loss_i.sum())
+            
+            loss = torch.mean(loss_i)
+            
+            if opt:
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
                 
-                # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
-                error_hat = (y_batch.reshape(-1,1) - z_hat)
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                sql2_loss = torch.square(error_hat).sum()
-
-                if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-
-                    pinball_loss = (self.crit_fract*error_hat[error_hat>0].norm(p=1) + (1-self.crit_fract)*error_hat[error_hat<0].norm(p=1))
+                # print('before projection')
+                # print(self.weights)
+                
+                if self.projection_simplex == True:
+                    w_proj = self.simplex_projection(self.weights.clone())
+                    with torch.no_grad():
+                        self.weights.copy_(torch.FloatTensor(w_proj))
                     
-                    # Total regret (scale CRPS for better trade-off control)
-                    loss = 2*(1-self.risk_aversion)*pinball_loss + 2*self.risk_aversion*sql2_loss \
-                        + self.gamma*crps_i/len(self.support)
-                    
+                    # print('after projection')
+                    # print(self.weights)
 
-                elif self.problem == 'pwl':
-                    #pwl_loss >= 0.2*(error),
-                    #pwl_loss >= -0.5*(error),
-                    #pwl_loss >= -0.8*(error + 0.3)]                                        
-                    pwl_loss = self.crit_fract*error_hat[error_hat>0].norm(p=1) + torch.maximum((-0.5)*error_hat[error_hat<0], (self.crit_fract - 1)*(error_hat[error_hat<0] + 0.1) ).norm(p=1)                    
-                    # Total regret (scale CRPS for better trade-off control)
-                    loss = pwl_loss + self.risk_aversion*sql2_loss + self.gamma*crps_i/len(self.support)
-
-                total_loss += loss.item()
-                
-        average_loss = total_loss / len(data_loader)
-        return average_loss
+            total_loss += loss.item() * y_batch.shape[0]
+            
+        return total_loss / len(data_loader.dataset)
 
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
@@ -1201,30 +1304,27 @@ class LinearPoolCRPSLayer(nn.Module):
         Returns:
             torch.Tensor: The convex combination of input tensors.
         """
-        # Ensure that the weights are in the range [0, 1] using sigmoid activation
-        #weights = torch.nn.functional.softmax(self.weights)
-
-        # Ensure that the weights are in the range [0, 1] using sigmoid activation
-        if self.apply_softmax:
-            weights = torch.nn.functional.softmax(self.weights, dim = 0)
-        else:
-            weights = self.weights
+        # # Ensure that the weights are in the range [0, 1] using sigmoid activation
+        # if self.apply_softmax:
+        #     weights = torch.nn.functional.softmax(self.weights, dim = 0)
+        # else:
+        #     weights = self.weights
         
         # Apply the weights element-wise to each input tensor !!!! CDFs
-        weighted_inputs = [weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
+        weighted_inputs = [self.weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
 
         # Perform the convex combination across input vectors
         combined_CDF = sum(weighted_inputs)
 
         return combined_CDF
     
-    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True):
-        # define projection problem for backward pass
-        lambda_proj = cp.Variable(self.num_inputs)
-        lambda_hat = cp.Parameter(self.num_inputs)
-        proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
-        
-        
+    def train_model(self, train_loader, optimizer, epochs = 20, patience=5, projection = True, 
+                    verbose = 0):
+        # # define projection problem for backward pass
+        # lambda_proj = cp.Variable(self.num_inputs)
+        # lambda_hat = cp.Parameter(self.num_inputs)
+        # proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
+                
         L_t = []
         best_train_loss = float('inf')
 
@@ -1236,17 +1336,14 @@ class LinearPoolCRPSLayer(nn.Module):
             for batch_data in train_loader:
                 
                 y_batch = batch_data[-1]
-                
                 #cdf_batch = [batch_data[i] for i in range(self.num_inputs)]
 
                 # clear gradients
-                optimizer.zero_grad()
-                
+                optimizer.zero_grad()                
                 # forward pass: combine forecasts and solve each newsvendor problem
                 comb_CDF = self.forward(batch_data[:-1])
                 
                 # estimate CRPS (heavyside function)
-                
                 
                 #loss_i = [torch.square( comb_CDF[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))]
                 loss_i = torch.sum(torch.square( comb_CDF - 1*(self.support >= y_batch.reshape(-1,1))), 1)
@@ -1263,19 +1360,26 @@ class LinearPoolCRPSLayer(nn.Module):
                 loss.backward()
                 optimizer.step()                
                 
-                if (projection)and(self.apply_softmax != True):     
-                    lambda_hat.value = to_np(self.weights)
-                    proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
-                    with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
+                # projection step
+                proj_lamda = simplex_projection_func(self, self.weights)
+
+                with torch.no_grad():
+                    self.weights.copy_(torch.FloatTensor(proj_lamda.detach().numpy()))
+                
+                # if (projection)and(self.apply_softmax != True):     
+                #     lambda_hat.value = to_np(self.weights)
+                #     proj_problem.solve(solver = 'GUROBI')
+                #     # update parameter values
+                #     with torch.no_grad():
+                #         self.weights.copy_(torch.FloatTensor(lambda_proj.value))
                 
                 running_loss += loss.item()
             
 
             L_t.append(to_np(self.weights).copy())
             average_train_loss = running_loss / len(train_loader)
-            print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+            if verbose!=-1:
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
 
             if average_train_loss < best_train_loss:
                 best_train_loss = average_train_loss

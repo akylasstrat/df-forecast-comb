@@ -81,16 +81,19 @@ def averaging_decisions(target_y, train_z_opt, problem,
     if (problem == 'reg_trad') or (problem == 'newsvendor'):
         m.addConstr( pinball_loss_i >= crit_fract*error)
         m.addConstr( pinball_loss_i >= (crit_fract-1)*error)    
-        m.setObjective( (1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error) , gp.GRB.MINIMIZE)
+        
+        m.setObjective( ((1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error))/n_obs, gp.GRB.MINIMIZE)
+
     elif problem == 'pwl':
         m.addConstr( pinball_loss_i >= crit_fract*error)
         m.addConstr( pinball_loss_i >= (-0.5)*error)
         m.addConstr( pinball_loss_i >= (crit_fract - 1)*(error + 0.1))
     
-        m.setObjective( pinball_loss_i.sum() + risk_aversion*(error@error), gp.GRB.MINIMIZE)
+        m.setObjective( ((1-risk_aversion)*pinball_loss_i.sum() + risk_aversion*(error@error))/n_obs, gp.GRB.MINIMIZE)
         
     m.optimize()
-    
+    print('In-sample Task loss')
+    print(f'{m.ObjVal}')
     return lambdas.X
 
 def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.01, .01).round(2), verbose = 0):
@@ -307,7 +310,8 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
             
             m.setObjective( (1-risk_aversion)*(weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
             m.optimize()
-                
+
+            print(f'In-sample cost:{m.ObjVal}')
             return offer.X
         
         else:
@@ -464,7 +468,7 @@ def nn_params():
     nn_params = {}
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
-    nn_params['num_epochs'] = 1500
+    nn_params['num_epochs'] = 500
     nn_params['learning_rate'] = 1e-2
     nn_params['apply_softmax'] = True
     return nn_params
@@ -482,13 +486,13 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [1] # select solar plant from GEFCom2014 data set
+    params['target_zone'] = [3] # select solar plant from GEFCom2014 data set
     
     # Problem parameters        
     params['crit_quant'] = np.arange(0.1  , 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     params['train_static'] = True
     params['train_adaptive'] = False
     
@@ -737,17 +741,45 @@ for tup in tuple_list[row_counter:]:
             else:            
                 train_p_list.append(wemp_to_support(train_w_dict[learner], trainY.values, y_supp))
                 test_p_list.append(wemp_to_support(test_w_dict[learner], trainY.values, y_supp))
-
-        # estimate CRPS
+        #%%
+        # In-sample performance estimate CRPS
         print('CRPS')
         for j, m in enumerate(all_learners): 
-            temp_CDF = test_p_list[j].cumsum(1)
-            H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY.values.reshape(-1,1)
+            temp_CDF = train_p_list[j].cumsum(1)
+            H_i = 1*np.repeat(y_supp.reshape(1,-1), len(comb_trainY), axis = 0)>=comb_trainY.values.reshape(-1,1)
             
             CRPS = np.square(temp_CDF - H_i).mean()
     
             print(f'{m}:{CRPS}')
 
+        temp_CDF = (train_p_list[0].cumsum(1) + train_p_list[1].cumsum(1) + train_p_list[2].cumsum(1))/3
+        H_i = 1*np.repeat(y_supp.reshape(1,-1), len(comb_trainY), axis = 0)>=comb_trainY.values.reshape(-1,1)
+        
+        CRPS = np.square(temp_CDF - H_i).mean()
+        print(f'OLP:{CRPS}')
+        #%% In-sample task loss performance     
+        print('In-sample task loss')
+        for j, m in enumerate(all_learners):
+            # Combine PDFs for each observation
+            temp_prescriptions = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, crit_quant = critical_fractile)
+
+            # Estimate task-loss for specific model
+            temp_decision_cost = 100*task_loss(temp_prescriptions, comb_trainY.values, target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+            print(f'Model:{m}')        
+            print(f'Task loss:{temp_decision_cost}')        
+
+        # Combine PDFs for each observation
+        ave_pdf = (train_p_list[0] + train_p_list[1] + train_p_list[2])/3
+        
+        temp_prescriptions = solve_opt_prob(y_supp, ave_pdf, target_problem, risk_aversion = risk_aversion, crit_quant = critical_fractile)
+        # Estimate task-loss for specific model
+        temp_decision_cost = 100*task_loss(temp_prescriptions, comb_trainY.values, target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
+
+        print(f'Model:OLP')        
+        print(f'Task loss:{temp_decision_cost}')        
+
+
+        #%%
         # Evaluate probabilistic forecast using Quantile Score 
         print('QS')
         target_quant = np.arange(.01, 1, .01)
@@ -765,7 +797,7 @@ for tup in tuple_list[row_counter:]:
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         plt.savefig(f'{cd}\\plots\\quantile_score_solar_forecast.pdf')
         plt.show()
-
+        #%%
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -781,11 +813,18 @@ for tup in tuple_list[row_counter:]:
         
 
         N_experts = len(all_learners)
-    #%%
+    #%% ########### Static combinations 
     train_targetY = comb_trainY.values.reshape(-1)
     
     # Supervised learning set as tensors for PyTorch
-    valid_obs = 1000
+    valid_obs = round(0.15*len(train_targetY))
+    
+    # Training data sets without validation
+    tensor_trainY_full = torch.FloatTensor(train_targetY)
+    tensor_train_p_full = torch.FloatTensor(np.column_stack((train_p_list)))
+    tensor_train_p_list_full = [torch.FloatTensor(train_p_list[i]) for i in range(N_experts)]
+    
+    # Training data when considering validation
     tensor_trainY = torch.FloatTensor(train_targetY[:-valid_obs])
     tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
     tensor_train_p_list = [torch.FloatTensor(train_p_list[i][:-valid_obs]) for i in range(N_experts)]
@@ -793,23 +832,14 @@ for tup in tuple_list[row_counter:]:
     tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
     tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
     
-    #tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
-    #tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
-    #tensor_testX = torch.FloatTensor(testX_date.values)
-
     tensor_trainX = torch.FloatTensor(comb_trainX_date_sine[:-valid_obs].values)
     tensor_validX = torch.FloatTensor(comb_trainX_date_sine[-valid_obs:].values)
     tensor_testX = torch.FloatTensor(testX_date_sine.values)
-
-    #tensor_trainX = torch.FloatTensor(comb_trainX_onehot[:-valid_obs])
-    #tensor_validX = torch.FloatTensor(comb_trainX_onehot[-valid_obs:])
-    #tensor_testX = torch.FloatTensor(testX_onehot)
 
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
     
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
-    
     
     trainZopt = np.zeros((n_train_obs, len(train_p_list)))
     testZopt = np.zeros((n_test_obs, len(test_p_list)))
@@ -819,7 +849,7 @@ for tup in tuple_list[row_counter:]:
         temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, 
                                     crit_quant = critical_fractile)
         trainZopt[:,j] = temp_z_opt
-
+    
     ###########% Static forecast combinations
     lambda_static_dict = {}
     
@@ -831,7 +861,8 @@ for tup in tuple_list[row_counter:]:
     
     # Ordinary linear pooling
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
-                
+    
+    #!!!!!!!!!!!! Add regularization here 
     
     # Inverse Performance-based weights (invW in the paper)
     lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, problem = target_problem,
@@ -849,55 +880,56 @@ for tup in tuple_list[row_counter:]:
 
     #%%    
     ###### CRPS learning (optimized once)
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = batch_size, shuffle = False)
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size, shuffle = False)
     
     if row_counter == 0:
         #### CRPS minimization using gradient-based approach
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                apply_softmax = True)
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-        lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-                                     projection = True)
-        print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
+        lpool_crps_model.train_model(train_data_loader_full, optimizer, epochs = 500, patience = patience, 
+                                     projection = True, verbose = -1)
+        
+        # Sanity check: assess in-sample perfomrance
 
-        if apply_softmax:
-            lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-        else:
-            lambda_crps = to_np(lpool_crps_model.weights)
-    
-        
-        lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
-        
-    lambda_static_dict['CRPS'] = lambda_crps
-    
+
+    lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
+
     #%%
     ##### Decision-focused learning combination for different values of gamma  
     from torch_layers_functions import *
      
-    
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 512, shuffle= False)    
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512, shuffle= False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512, shuffle= False)
     
     num_epochs = 100
-    patience = 10
+    patience = 5
     
     # Iterate over values of hyperparameter \gamma
     for gamma in config['gamma_list']:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                    gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion,
-                                                    apply_softmax = True, regularizer=None)
+                                                    gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion, 
+                                                    projection_simplex = True, regularizer=None)
         
-        optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
+        optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = 1e-2)
         
-        lpool_newsv_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
-        if apply_softmax:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
-        else:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
+        lpool_newsv_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = num_epochs, 
+                                          patience = patience, validation = False, relative_tolerance = 1e-5)
 
+        
+        lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.weights.detach().numpy()
+
+        print('Weights')
+        print(lambda_static_dict[f'DF_{gamma}'])
+        # if apply_softmax:
+        #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+        # else:
+        #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
+#%%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
@@ -909,10 +941,10 @@ for tup in tuple_list[row_counter:]:
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static.csv')
 
     #%%
-    ### Adaptive/ Conditional combination models: combination weights depend on additional contextual information
+    ### Adaptive/ Conditional combinations: linear pool weights adapt to contextual information
     
-    train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size)
-    valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size)
+    train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size, shuffle = False)
+    valid_adapt_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validX, tensor_validY], batch_size = batch_size, shuffle = False)
             
     tensor_trainZopt = torch.FloatTensor(trainZopt[:-valid_obs])
     tensor_validZopt = torch.FloatTensor(trainZopt[-valid_obs:])
@@ -920,10 +952,9 @@ for tup in tuple_list[row_counter:]:
     
     adaptive_models_dict = {}
     
-    adapt_models = config['train_adaptive']
     num_epochs = 500
 
-    if adapt_models:
+    if config['train_adaptive'] == True:
         ### CRPS Learning - Linear Regression
         lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
                                                           support = torch.FloatTensor(y_supp))        
@@ -943,8 +974,8 @@ for tup in tuple_list[row_counter:]:
         adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
     
         ### Conditional combination of weighted decisions ***these do not appear in the paper***
-        train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size)
-        valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size)
+        train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size, shuffle = False)
+        valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size, shuffle = False)
     
     
         lr_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
