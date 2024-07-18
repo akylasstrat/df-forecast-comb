@@ -14,6 +14,7 @@ import sys, os
 #import pickle
 import gurobipy as gp
 import torch
+import pickle
 
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.model_selection import GridSearchCV
@@ -741,6 +742,7 @@ for tup in tuple_list[row_counter:]:
             else:            
                 train_p_list.append(wemp_to_support(train_w_dict[learner], trainY.values, y_supp))
                 test_p_list.append(wemp_to_support(test_w_dict[learner], trainY.values, y_supp))
+        
         #%%
         # In-sample performance estimate CRPS
         print('CRPS')
@@ -880,21 +882,21 @@ for tup in tuple_list[row_counter:]:
 
     #%%    
     ###### CRPS learning (optimized once)
-    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = batch_size, shuffle = False)
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 512, shuffle = False)
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512, shuffle = False)
     
     if row_counter == 0:
         #### CRPS minimization using gradient-based approach
-        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                               apply_softmax = True)
-        optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-        lpool_crps_model.train_model(train_data_loader_full, optimizer, epochs = 500, patience = patience, 
-                                     projection = True, verbose = -1)
+        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
+        optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = 1e-2)
+        lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25)
         
+        #%%
         # Sanity check: assess in-sample perfomrance
+        # lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp)
 
-
+    #%%
     lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
 
     #%%
@@ -913,7 +915,7 @@ for tup in tuple_list[row_counter:]:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                     gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion, 
-                                                    projection_simplex = True, regularizer=None)
+                                                    projection_simplex = True)
         
         optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = 1e-2)
         
@@ -940,6 +942,12 @@ for tup in tuple_list[row_counter:]:
         lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
         lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static.csv')
 
+        with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static_dict.pickle', 'wb') as handle:
+            pickle.dump(lambda_static_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+        # with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static_dict.pickle', 'rb') as handle:
+        #     lambda_static_dict = pickle.load(handle)
+
     #%%
     ### Adaptive/ Conditional combinations: linear pool weights adapt to contextual information
     
@@ -953,70 +961,95 @@ for tup in tuple_list[row_counter:]:
     adaptive_models_dict = {}
     
     num_epochs = 500
-
+    #%%
+    ####### Train Conditional/Adaptive Combination models
     if config['train_adaptive'] == True:
         ### CRPS Learning - Linear Regression
+        torch.manual_seed(0)
         lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
                                                           support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(lr_lpool_crps_model.parameters(), lr = learning_rate)        
+        optimizer = torch.optim.Adam(lr_lpool_crps_model.parameters(), lr = 1e-2)        
         lr_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
+                                          patience = 10, validation = True)
     
+
         adaptive_models_dict['CRPS-LR'] = lr_lpool_crps_model
-    
-        ### CRPS Learning - Neural Net model (MLP)
         
+        ### CRPS Learning - Neural Net/ MLP
+        torch.manual_seed(0)        
         mlp_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], output_size = N_experts, support = torch.FloatTensor(y_supp))        
-        optimizer = torch.optim.Adam(mlp_lpool_crps_model.parameters(), lr = learning_rate)        
+        optimizer = torch.optim.Adam(mlp_lpool_crps_model.parameters(), lr = 1e-3)        
         mlp_lpool_crps_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
+                                          patience = 10, validation = True)
     
         adaptive_models_dict['CRPS-MLP'] = mlp_lpool_crps_model
-    
+        if config['save']:
+            with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'wb') as handle:
+                pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        # with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'rb') as handle:
+        #     adaptive_models_dict = pickle.load(handle)
+        #%%
         ### Conditional combination of weighted decisions ***these do not appear in the paper***
         train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size, shuffle = False)
         valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size, shuffle = False)
     
-    
+        torch.manual_seed(0)        
         lr_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, support = torch.FloatTensor(y_supp))        
         optimizer = torch.optim.Adam(lr_lpool_decision_model.parameters(), lr = 1e-3)        
         lr_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
+                                          patience = patience, validation = True)
     
         adaptive_models_dict['SalvaBench-LR'] = lr_lpool_decision_model
-    
+
+        torch.manual_seed(0)        
+        
         mlp_lpool_decision_model = AdaptiveLinearPoolDecisions(input_size = tensor_trainX.shape[1], hidden_sizes = [20, 20, 20], 
                                                                output_size = N_experts, support = torch.FloatTensor(y_supp))        
         optimizer = torch.optim.Adam(mlp_lpool_decision_model.parameters(), lr = 1e-3)        
         mlp_lpool_decision_model.train_model(train_dec_data_loader, valid_dec_data_loader, optimizer, epochs = num_epochs, 
-                                          patience = patience, projection = False)
+                                          patience = patience, validation = True)
     
         adaptive_models_dict['SalvaBench-MLP'] = mlp_lpool_decision_model
+        if config['save']:
+            with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'wb') as handle:
+                pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
         
-        ### Decision Combination Learning - Linear Regression + MLP models over all values of gamma
+        #%%
+        ### Decision-focused Learning - Linear Regression + MLP models over all values of gamma
+        from torch_layers_functions import *
+        
         for gamma in config['gamma_list']:
-                        
+            
+            torch.manual_seed(0)        
+
             lr_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], 
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), gamma = gamma, critic_fract = critical_fractile, 
-                                                                     risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
+                                                                     risk_aversion = risk_aversion, apply_softmax = True)
             
             optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 1e-2)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 500, patience = 10, projection = False, relative_tolerance = 0)
+                                                  optimizer, epochs = 500, patience = 10, relative_tolerance = 0, validation = True)
             
             
             adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
     
+            torch.manual_seed(0)        
+
             mlp_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20,20,20], 
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), 
                                                                      gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
             
             optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 1e-2)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 500, patience = 10, projection = False, relative_tolerance = 0)
+                                                  optimizer, epochs = 500, patience = 10, projection = False, relative_tolerance = 0, validation = True)
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
     
+        if config['save']:
+            with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'wb') as handle:
+                pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
     #%% Performance evaluation
 
     static_models = list(lambda_static_dict) 
