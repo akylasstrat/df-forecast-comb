@@ -94,8 +94,8 @@ def tree_params():
     params['max_features'] = 1
     return params
 
-def insample_weight_tuning(grid, target_y, train_z_opt, 
-                           support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
+def insample_weight_tuning(grid, target_y, train_z_opt, train_prob_list, 
+                           support = np.arange(0, 1.01, .01).round(2), regularization_gamma = 0, verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
         set weights based on inverse cost (or could use softmax activation)
         - Args:
@@ -114,16 +114,29 @@ def insample_weight_tuning(grid, target_y, train_z_opt,
     #z_opt = np.zeros((n_obs, n_models))
     insample_da_cost = np.zeros((n_experts))
     insample_rt_cost = np.zeros((n_experts))
+    in_sample_CRPS = np.zeros((n_experts))
 
+    insample_cost_regularized = np.zeros((n_experts))
     insample_inverse_cost = np.zeros((n_experts))
 
     for j in range(n_experts):        
+        # In-sample scheduling costs
         temp_da_cost, temp_rt_cost = scheduling_task_loss(grid, train_z_opt[j], target_y.reshape(-1))
         insample_da_cost[j] = temp_da_cost
         insample_rt_cost[j] = temp_rt_cost
         
-        
-        insample_inverse_cost[j] = 1/(insample_da_cost[j] + insample_rt_cost[j])
+        # Estimate in-sample CRPS        
+        temp_CDF = train_prob_list[j].cumsum(1)
+        H_i = 1*np.repeat(y_supp.reshape(1,-1), len(comb_trainY), axis = 0)>=comb_trainY.values.reshape(-1,1)
+        in_sample_CRPS[j] =  np.square(temp_CDF - H_i).mean()
+
+        # In-sample regularized cost
+        if regularization_gamma =='inf':
+            insample_cost_regularized[j] = in_sample_CRPS[j]
+        else:
+            insample_cost_regularized[j] = (insample_da_cost[j] + insample_rt_cost[j]) + regularization_gamma*in_sample_CRPS[j]            
+
+        insample_inverse_cost[j] = 1/insample_cost_regularized[j]
 
     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
@@ -472,7 +485,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.001, 0.01]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 0
+    params['target_ieee_case'] = 1
     
     params['train_static'] = True
     
@@ -701,7 +714,7 @@ for tup in tuple_list[row_counter:]:
         train_w_dict['cart'] = cart_find_weights(trainX_v2, comb_trainX_v2, cart_model)
         test_w_dict['cart'] = cart_find_weights(trainX_v2, testX_v2, cart_model)
                 
-        #%%
+        
         # Random Forest
         if dataset == 'solar':
             #rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 'max_features':[1, 2, 4, len(trainX_v3.columns)]}        
@@ -788,13 +801,18 @@ for tup in tuple_list[row_counter:]:
         
         N_experts = len(all_learners)
     #%%
+    
     train_targetY = comb_trainY.values.reshape(-1)
     
     # Supervised learning set as tensors for PyTorch
-    valid_obs = 1000
+    valid_obs = round(0.15*len(comb_trainY))
     tensor_trainY = torch.FloatTensor(train_targetY[:-valid_obs])
     tensor_train_p = torch.FloatTensor(np.column_stack((train_p_list)))
     tensor_train_p_list = [torch.FloatTensor(train_p_list[i][:-valid_obs]) for i in range(N_experts)]
+    
+    # full training data sets (no validation)
+    tensor_trainY_full = torch.FloatTensor(train_targetY[:-valid_obs])
+    tensor_train_p_list_full = [torch.FloatTensor(train_p_list[i][:-valid_obs]) for i in range(N_experts)]
 
     tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
     tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
@@ -804,10 +822,11 @@ for tup in tuple_list[row_counter:]:
     #tensor_testX = torch.FloatTensor(testX_date.values)
     
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
+    train_data_full = torch.utils.data.TensorDataset(tensor_train_p_list_full[0], tensor_train_p_list_full[1], tensor_train_p_list_full[2], 
+                                                     tensor_trainY_full)
     
     n_train_obs = len(train_targetY)
     n_test_obs = len(testY)
-    
     
     trainZopt = N_experts*[np.zeros((n_train_obs, grid['n_unit']))]
     testZopt = N_experts*[np.zeros((n_test_obs, grid['n_unit']))]
@@ -828,9 +847,12 @@ for tup in tuple_list[row_counter:]:
         
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
-    
-    # Set weights to in-sample performance
-    lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, support = y_supp, risk_aversion = risk_aversion)
+    # Inverse Performance-based weights (invW in the paper)
+    for g in (config['gamma_list'] + ['inf']):
+        lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, train_p_list, regularization_gamma=g, problem = target_problem,
+                                                     crit_quant = critical_fractile, support = y_supp, risk_aversion = risk_aversion)
+        
+        lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
     
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
     #lambda_ = averaging_decisions(grid, train_targetY, trainZopt, support = y_supp, bounds = False, risk_aversion = risk_aversion)
@@ -839,67 +861,64 @@ for tup in tuple_list[row_counter:]:
     #lambda_static_dict['SalvaBench'] = lambda_
     #%%
     #% CRPS learning
-    
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size)
+    from torch_layers_functions import * 
+
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = batch_size, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size, shuffle = False)
     
     if row_counter == 0:
         #### CRPS minimization/ with torch layer
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                               apply_softmax = True)
+                                               projection_simplex = True)
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-        lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-                                     projection = True)
-        print(to_np(torch.nn.functional.softmax(lpool_crps_model.weights)))
+        lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25, 
+                                     validation = False)
 
-        if apply_softmax:
-            lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-        else:
-            lambda_crps = to_np(lpool_crps_model.weights)
-    
-        
-        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)
-        
-    lambda_static_dict['CRPS'] = lambda_crps
+        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)        
+    lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
     
     #%%
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
     patience = 5
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 500)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 500)
     
-    #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 500, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 500, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 500, shuffle = False)
     
+    #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]    
     for gamma in config['gamma_list']:
         
         lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, apply_softmax = True, clearing_type = 'stoch', 
-                                                 regularization = risk_aversion)
+                                                 grid = grid, gamma = gamma, clearing_type = 'det', projection_simplex = True)
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
-        lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = 30, 
-                                          patience = patience, projection = False, validation = False, relative_tolerance = 1e-5)
-        if apply_softmax:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
-        else:
-            lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
-        
-        
+        lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 30, 
+                                          patience = patience, validation = False, relative_tolerance = 1e-5)
 
+
+        lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.weights.detach().numpy()
+        
+        # if apply_softmax:
+        #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
+        # else:
+        #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
+        
         if config['save']:
-            #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
             lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
             lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
-
+    
+            with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static_dict.pickle', 'wb') as handle:
+                pickle.dump(lambda_static_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
 
-
+    #%%
     ### Adaptive combination model    
     # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
     # iv) create one for CRPS only (gamma == +inf)

@@ -701,7 +701,7 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
-                 gamma, regularization = 0, apply_softmax = False, initial_weights = None, clearing_type = 'det', include_network = False, 
+                 gamma, regularization = 0, projection_simplex = True, apply_softmax = False, initial_weights = None, clearing_type = 'det', include_network = False, 
                  add_network = False):
         super(LinearPoolSchedLayer, self).__init__()
 
@@ -719,6 +719,9 @@ class LinearPoolSchedLayer(nn.Module):
         self.regularization = regularization
         self.support = support
         self.include_network = include_network
+        self.Pmax_tensor = torch.FloatTensor(self.grid['Pmax'].reshape(-1))
+        self.Pmin_tensor = torch.FloatTensor(self.grid['Pmin'].reshape(-1))
+        self.projection_simplex = projection_simplex 
         #self.risk_aversion = risk_aversion
         self.gamma = gamma
         self.apply_softmax = apply_softmax
@@ -819,6 +822,7 @@ class LinearPoolSchedLayer(nn.Module):
         ###### RT variables
         r_up = cp.Variable((grid['n_unit']), nonneg = True)
         r_down = cp.Variable((grid['n_unit']), nonneg = True)
+        # node_inj = cp.Variable((grid['n_lines']))
         
         g_shed = cp.Variable(1, nonneg = True)
         l_shed = cp.Variable(1, nonneg = True)
@@ -833,10 +837,10 @@ class LinearPoolSchedLayer(nn.Module):
         #RT_sched_constraints += [r_up <= grid['R_u_max'].reshape(-1), r_down <= grid['R_d_max'].reshape(-1)]            
             
         
-        #m.addConstrs(node_inj[:,i] == (node_G@p_G_i[:,i] + node_L@slack_i[:,i] -node_L@curt_i[:,i] 
-        #                               - node_L@node_load_i[:,i]) for i in range(n_samples))    
-        #m.addConstrs(PTDF@node_inj[:,i] <= grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
-        #m.addConstrs(PTDF@node_inj[:,i] >= -grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
+        # m.addConstrs(node_inj[:,i] == (grid['node_G']@p_G_i[:,i] + grid['node_L']@slack_i[:,i] -grid['node_L']@curt_i[:,i] 
+        #                               - grid['node_L']@node_load_i[:,i]) for i in range(n_samples))    
+        # m.addConstrs(PTDF@node_inj[:,i] <= grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
+        # m.addConstrs(PTDF@node_inj[:,i] >= -grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
         
         # balancing
         RT_sched_constraints += [p_gen.sum() + r_up.sum() - r_down.sum() -g_shed.sum() + grid['w_capacity']*w_actual + l_shed.sum() == grid['Pd'].sum()]
@@ -848,6 +852,20 @@ class LinearPoolSchedLayer(nn.Module):
         self.rt_layer = CvxpyLayer(rt_problem, parameters=[p_gen, w_actual],
                                            variables = [r_up, r_down, g_shed, l_shed, cost_RT] )
 
+    def simplex_projection(self, w_init):
+        """
+        Projection to unit simplex, closed-form solution
+        Ref: Wang, Weiran, and Miguel A. Carreira-Perpinán. "Projection onto the probability simplex: An efficient algorithm with a simple proof, and an application." arXiv preprint arXiv:1309.1541 (2013).
+        """
+
+        u_sorted, indices = torch.sort(w_init, descending = True)
+        j_ind = torch.arange(1, self.num_inputs + 1)
+        rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
+        dual_mu = 1/rho*(1-u_sorted[:rho].sum())
+        
+        w_proj = torch.maximum(w_init + dual_mu, torch.zeros_like(w_init))
+        return w_proj
+    
     def forward(self, list_inputs):
         """
         Forward pass of the newvendor layer.
@@ -858,14 +876,9 @@ class LinearPoolSchedLayer(nn.Module):
         Returns:
             torch.Tensor: The convex combination of input tensors/ combination of PDFs.
         """
-        # Ensure that the weights are in the range [0, 1] using softmax activation
-        if self.apply_softmax:
-            weights = torch.nn.functional.softmax(self.weights, dim = 0)
-        else:
-            weights = self.weights
 
         # Apply the weights element-wise to each input tensor
-        weighted_inputs = [weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+        weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
 
         # Perform the convex combination across input vectors
         combined_pdf = sum(weighted_inputs)
@@ -875,161 +888,31 @@ class LinearPoolSchedLayer(nn.Module):
 
         return combined_pdf, cvxpy_output
     
-    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
+    
+    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, validation = False, 
                     relative_tolerance = 0):
+        """
+        Run gradient-descent algorithm for model training
+        """
         
-        # define projection problem for backward pass
-        if (projection)and(self.apply_softmax != True):     
-            lambda_proj = cp.Variable(self.num_inputs)
-            lambda_hat = cp.Parameter(self.num_inputs)
-            proj_problem = cp.Problem(cp.Minimize(0.5*cp.sum_squares(lambda_proj-lambda_hat)), [lambda_proj >= 0, lambda_proj.sum()==1])
+        # Initialize training loss and placeholder variables        
+        print('Initialize loss...')
         
-        
-        #L_t = []
-        best_train_loss = 1e7
-        best_val_loss = 1e7 
+        best_train_loss = self.epoch_train(train_loader)
+        # best_train_loss = float('inf')
+        best_val_loss = float('inf')
         early_stopping_counter = 0
         best_weights = copy.deepcopy(self.state_dict())
-
-        Pmax_tensor = torch.FloatTensor(self.grid['Pmax'].reshape(-1))
-        Pmin_tensor = torch.FloatTensor(self.grid['Pmin'].reshape(-1))
-        
-        # estimate initial loss
-        print('Estimate Initial Loss...')
-        initial_train_loss = 0
-        with torch.no_grad():
-            for batch_data in train_loader:
-                y_batch = batch_data[-1]
-                # clear gradients
-                optimizer.zero_grad()
-                output_hat = self.forward(batch_data[:-1])
                 
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
-                
-                decisions_hat = output_hat[1][0]                
-                p_hat = decisions_hat[0]
-                
-                # Project p_hat to feasible set
-                p_hat_proj = torch.maximum(torch.minimum(p_hat, Pmax_tensor), Pmin_tensor)
-                cost_DA_hat = decisions_hat[-1]
-
-                # solve RT layer, find redispatch cost                
-                rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':50_000})                
-                # CRPS of combination
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-                loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
- 
-                initial_train_loss += loss.item()
-                
-        initial_train_loss = initial_train_loss/len(train_loader)
-        best_train_loss = initial_train_loss
-        print(f'Initial Estimate: {best_train_loss}')
         for epoch in range(epochs):
-            # activate train functionality
-            self.train()
-            running_loss = 0.0                
-
-            # sample batch data
-            for batch_data in train_loader:
-                y_batch = batch_data[-1]
-                
-                # clear gradients
-                optimizer.zero_grad()
-
-                # forward pass: combine forecasts and each stochastic ED problem
-                #start = time.time()
-                #start = time.time()
-                output_hat = self.forward(batch_data[:-1])
-                
-                #end = time.time()
-                #print('Forward pass', end - start)
-
-                
-                #end = time.time()
-                #print('Forward pass time', end - start)
-
-
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
-                
-                decisions_hat = output_hat[1][0]
-                
-                p_hat = decisions_hat[0]
-                #y_hat = decisions_hat[1]
-                
-                # Project p_hat to feasible set
-                p_hat_proj = torch.maximum(torch.minimum(p_hat, Pmax_tensor), Pmin_tensor)
-                #print(p_hat)
-                #print(p_hat_proj)
-                cost_DA_hat = decisions_hat[-1]
-
-                # total loss
-                #print(cost_DA_hat.mean())
-                #print(p_hat)
-                
-                # solve RT layer, find redispatch cost
-                # forward pass: combine forecasts and each stochastic ED problem
-                
-
-                rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':50_000})                
-
-                # CRPS of combination
-                # forward pass: combine forecasts and each stochastic ED problem
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-
-                
-                # L2 regularization
-                #error_hat = (y_batch.reshape(-1,1) - y_hat)
-                #print(error_hat.shape)
-                #sql2_loss = self.grid['w_capacity']*torch.square(error_hat).sum()
-                
-                loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
-                #loss = rt_output[-1].mean() + self.gamma*crps_i
-                
-                #loss = cost_DA_hat.mean()
-                    
-                # backward pass
-                # forward pass: combine forecasts and each stochastic ED problem
-                loss.backward()
-                optimizer.step()
-
-
-                
-                # Apply projection
-                if (projection)and(self.apply_softmax != True):     
-                    lambda_hat.value = to_np(self.weights)
-                    proj_problem.solve(solver = 'GUROBI')
-                    # update parameter values
-                    with torch.no_grad():
-                        self.weights.copy_(torch.FloatTensor(lambda_proj.value))
-
-                running_loss += loss.item()
-
-                
-            if epoch%1 == 0:
-                print(torch.nn.functional.softmax(self.weights))
-                
-            average_train_loss = running_loss / len(train_loader)
-                                        
-            if validation == True:
-                # evaluate performance on stand-out validation set
-                val_loss = self.evaluate(val_loader)
-                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
-                
-                if (val_loss < best_val_loss) and ( (best_val_loss-val_loss)/best_val_loss > relative_tolerance):
-                    best_val_loss = val_loss
-                    best_weights = copy.deepcopy(self.state_dict())
-                    early_stopping_counter = 0
-                else:
-                    early_stopping_counter += 1
-                    if early_stopping_counter >= patience:
-                        print("Early stopping triggered.")
-                        # recover best weights
-                        self.load_state_dict(best_weights)
-                        return
-            else:
-                # only evaluate on training data set
+            
+            print('Current weights')
+            print(self.weights)
+            
+            
+            if validation == False:
+                # only check performance on training data
+                average_train_loss = self.epoch_train(train_loader, optimizer)
                 print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
     
                 if (average_train_loss < best_train_loss) and ( (best_train_loss-average_train_loss)/best_train_loss > relative_tolerance):
@@ -1044,42 +927,284 @@ class LinearPoolSchedLayer(nn.Module):
                         # recover best weights
                         self.load_state_dict(best_weights)
                         return
-        
-        print('Reached epoch limit.')
-        self.load_state_dict(best_weights)
-        return
+                    
+            elif validation == True:
+                
+                average_train_loss = self.epoch_train(train_loader, optimizer)
+                val_loss = self.epoch_train(val_loader)
 
-    def evaluate(self, data_loader):
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+    
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        break
+                
+                
+    def epoch_train(self, data_loader, opt=None):
+        """Standard training/evaluation epoch over the dataset"""
         # evaluate loss criterion/ used for estimating validation loss
-        self.eval()
         total_loss = 0.0
-        with torch.no_grad():
-            for batch_data in data_loader:
-                y_batch = batch_data[-1]
 
-                # forward pass: combine forecasts and each stochastic ED problem
-                output_hat = self.forward(batch_data[:-1])
+        for batch_data in data_loader:
+            
+            y_batch = batch_data[-1]
 
-                pdf_comb_hat = output_hat[0]
-                cdf_comb_hat = pdf_comb_hat.cumsum(1)
+            output_hat = self.forward(batch_data[:-1])
+            
+            pdf_comb_hat = output_hat[0]
+            cdf_comb_hat = pdf_comb_hat.cumsum(1)
+            
+            decisions_hat = output_hat[1]                
+            p_hat = decisions_hat[0]
+            
+            # Project p_hat to feasible set
+            p_hat_proj = torch.maximum(torch.minimum(p_hat, self.Pmax_tensor), self.Pmin_tensor)
+
+            # solve RT layer, find redispatch cost                
+            rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':50_000})   
+            
+            # scale costs to EUR/MWh
+            scale_factor_DA_i = p_hat_proj.detach().numpy().sum(1).reshape(-1,1)
+            scale_factor_RT_i = rt_output[0].detach().numpy().sum(1).reshape(-1,1) + + rt_output[1].detach().numpy().sum(1).reshape(-1,1)
+            
+            cost_DA_hat_i = decisions_hat[-1]/ self.Pmax_tensor.sum()
+            cost_RT_i = rt_output[-1]/ self.Pmax_tensor.sum()
+            
+            # print(cost_DA_hat_i.shape)
+            # print(cost_DA_hat_i)
+
+            # print(cost_RT_i)
+            
+            # CRPS of combination
+            crps_i = torch.sum(torch.square( cdf_comb_hat - 1*(self.support >= y_batch.reshape(-1,1))), 1).reshape(-1,1)
+            
+            # loss_i = cost_DA_hat_i + cost_RT_i + self.gamma*crps_i
+            loss_i = cost_RT_i + self.gamma*crps_i
+            
+            
+            loss = torch.mean(loss_i)
+
+            if opt:
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                                
+                if self.projection_simplex == True:
+                    w_proj = self.simplex_projection(self.weights.clone())
+                    with torch.no_grad():
+                        self.weights.copy_(torch.FloatTensor(w_proj))
+                    
+            total_loss += loss.item() * y_batch.shape[0]
+            
+        return total_loss / len(data_loader.dataset)
+    
+    # def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, projection = True, validation = False, 
+    #                 relative_tolerance = 0):
+        
                 
-                decisions_hat = output_hat[1][0]
-                
-                p_hat = decisions_hat[0]
-                
-                # solve RT layer, find redispatch cost
-                rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':50000})                
+    #     #L_t = []
+    #     best_train_loss = 1e7
+    #     best_val_loss = 1e7 
+    #     early_stopping_counter = 0
+    #     best_weights = copy.deepcopy(self.state_dict())
 
-                # CRPS of combination
-                crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
-
-                # total loss
-                loss = rt_output[-1].mean() + self.gamma*crps_i
-
-                total_loss += loss.item()
+    #     Pmax_tensor = torch.FloatTensor(self.grid['Pmax'].reshape(-1))
+    #     Pmin_tensor = torch.FloatTensor(self.grid['Pmin'].reshape(-1))
+        
+    #     # estimate initial loss
+    #     print('Estimate Initial Loss...')
+    #     initial_train_loss = 0
+    #     with torch.no_grad():
+    #         for batch_data in train_loader:
+    #             y_batch = batch_data[-1]
+    #             # clear gradients
+    #             optimizer.zero_grad()
+    #             output_hat = self.forward(batch_data[:-1])
                 
-        average_loss = total_loss / len(data_loader)
-        return average_loss
+    #             pdf_comb_hat = output_hat[0]
+    #             cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+    #             decisions_hat = output_hat[1][0]                
+    #             p_hat = decisions_hat[0]
+                
+    #             # Project p_hat to feasible set
+    #             p_hat_proj = torch.maximum(torch.minimum(p_hat, Pmax_tensor), Pmin_tensor)
+    #             cost_DA_hat = decisions_hat[-1]
+
+    #             # solve RT layer, find redispatch cost                
+    #             rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':50_000})                
+    #             # CRPS of combination
+    #             crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+    #             loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
+ 
+    #             initial_train_loss += loss.item()
+                
+    #     initial_train_loss = initial_train_loss/len(train_loader)
+    #     best_train_loss = initial_train_loss
+    #     print(f'Initial Estimate: {best_train_loss}')
+    #     for epoch in range(epochs):
+    #         # activate train functionality
+    #         self.train()
+    #         running_loss = 0.0                
+
+    #         # sample batch data
+    #         for batch_data in train_loader:
+    #             y_batch = batch_data[-1]
+                
+    #             # clear gradients
+    #             optimizer.zero_grad()
+
+    #             # forward pass: combine forecasts and each stochastic ED problem
+    #             #start = time.time()
+    #             #start = time.time()
+    #             output_hat = self.forward(batch_data[:-1])
+                
+    #             #end = time.time()
+    #             #print('Forward pass', end - start)
+
+                
+    #             #end = time.time()
+    #             #print('Forward pass time', end - start)
+
+
+    #             pdf_comb_hat = output_hat[0]
+    #             cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+    #             decisions_hat = output_hat[1][0]
+                
+    #             p_hat = decisions_hat[0]
+    #             #y_hat = decisions_hat[1]
+                
+    #             # Project p_hat to feasible set
+    #             p_hat_proj = torch.maximum(torch.minimum(p_hat, Pmax_tensor), Pmin_tensor)
+    #             #print(p_hat)
+    #             #print(p_hat_proj)
+    #             cost_DA_hat = decisions_hat[-1]
+
+    #             # total loss
+    #             #print(cost_DA_hat.mean())
+    #             #print(p_hat)
+                
+    #             # solve RT layer, find redispatch cost
+    #             # forward pass: combine forecasts and each stochastic ED problem
+                
+
+    #             rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':50_000})                
+
+    #             # CRPS of combination
+    #             # forward pass: combine forecasts and each stochastic ED problem
+    #             crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+
+                
+    #             # L2 regularization
+    #             #error_hat = (y_batch.reshape(-1,1) - y_hat)
+    #             #print(error_hat.shape)
+    #             #sql2_loss = self.grid['w_capacity']*torch.square(error_hat).sum()
+                
+    #             loss = cost_DA_hat.mean() + rt_output[-1].mean() + self.gamma*crps_i
+    #             #loss = rt_output[-1].mean() + self.gamma*crps_i
+                
+    #             #loss = cost_DA_hat.mean()
+                    
+    #             # backward pass
+    #             # forward pass: combine forecasts and each stochastic ED problem
+    #             loss.backward()
+    #             optimizer.step()
+
+
+                
+    #             # Apply projection
+    #             if (projection)and(self.apply_softmax != True):     
+    #                 lambda_hat.value = to_np(self.weights)
+    #                 proj_problem.solve(solver = 'GUROBI')
+    #                 # update parameter values
+    #                 with torch.no_grad():
+    #                     self.weights.copy_(torch.FloatTensor(lambda_proj.value))
+
+    #             running_loss += loss.item()
+
+                
+    #         if epoch%1 == 0:
+    #             print(torch.nn.functional.softmax(self.weights))
+                
+    #         average_train_loss = running_loss / len(train_loader)
+                                        
+    #         if validation == True:
+    #             # evaluate performance on stand-out validation set
+    #             val_loss = self.evaluate(val_loader)
+    #             print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+                
+    #             if (val_loss < best_val_loss) and ( (best_val_loss-val_loss)/best_val_loss > relative_tolerance):
+    #                 best_val_loss = val_loss
+    #                 best_weights = copy.deepcopy(self.state_dict())
+    #                 early_stopping_counter = 0
+    #             else:
+    #                 early_stopping_counter += 1
+    #                 if early_stopping_counter >= patience:
+    #                     print("Early stopping triggered.")
+    #                     # recover best weights
+    #                     self.load_state_dict(best_weights)
+    #                     return
+    #         else:
+    #             # only evaluate on training data set
+    #             print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+    
+    #             if (average_train_loss < best_train_loss) and ( (best_train_loss-average_train_loss)/best_train_loss > relative_tolerance):
+    #                 best_train_loss = average_train_loss
+    #                 best_weights = copy.deepcopy(self.state_dict())
+    #                 early_stopping_counter = 0
+                    
+    #             else:
+    #                 early_stopping_counter += 1
+    #                 if early_stopping_counter >= patience:
+    #                     print("Early stopping triggered.")
+    #                     # recover best weights
+    #                     self.load_state_dict(best_weights)
+    #                     return
+        
+    #     print('Reached epoch limit.')
+    #     self.load_state_dict(best_weights)
+    #     return
+
+    # def evaluate(self, data_loader):
+    #     # evaluate loss criterion/ used for estimating validation loss
+    #     self.eval()
+    #     total_loss = 0.0
+    #     with torch.no_grad():
+    #         for batch_data in data_loader:
+    #             y_batch = batch_data[-1]
+
+    #             # forward pass: combine forecasts and each stochastic ED problem
+    #             output_hat = self.forward(batch_data[:-1])
+
+    #             pdf_comb_hat = output_hat[0]
+    #             cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                
+    #             decisions_hat = output_hat[1][0]
+                
+    #             p_hat = decisions_hat[0]
+                
+    #             # solve RT layer, find redispatch cost
+    #             rt_output = self.rt_layer(p_hat, y_batch.reshape(-1,1), solver_args={'max_iters':50000})                
+
+    #             # CRPS of combination
+    #             crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+
+    #             # total loss
+    #             loss = rt_output[-1].mean() + self.gamma*crps_i
+
+    #             total_loss += loss.item()
+                
+    #     average_loss = total_loss / len(data_loader)
+    #     return average_loss
     
 class LinearPoolCRPSLayer(nn.Module):        
     def __init__(self, num_inputs, support, projection_simplex = True):

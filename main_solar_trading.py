@@ -141,8 +141,8 @@ def crps_learning_combination(target_y, prob_vectors, support = np.arange(0, 1.0
     
     return lambdas.X
 
-def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
-                           support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
+def insample_weight_tuning(target_y, train_z_opt, train_prob_list, problem = 'newsvendor', 
+                           support = np.arange(0, 1.01, .01).round(2), regularization_gamma = 0, verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
         set weights based on inverse cost (or could use softmax activation)
         - Args:
@@ -163,29 +163,31 @@ def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor',
     print('Solve in-sample stochastic problems...')
     
     #z_opt = np.zeros((n_obs, n_models))
-    insample_cost = np.zeros((n_models))
     insample_inverse_cost = np.zeros((n_models))
-
+    insample_regret = np.zeros((n_models))
+    in_sample_CRPS = np.zeros((n_models))
+    insample_cost_regularized = np.zeros((n_models))
+    
     for j in range(n_models):
-        '''
-        if problem == 'newsvendor':
-            for i in range(n_obs):
-                # Solve stochastic problem, find decision
-                z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
-            # Estimate decision cost (regret)
-        elif problem == 'reg_trad':
-            
-            temp_w_mat = np.array(prob_vectors[j])
-
-            temp_z_opt = solve_opt_prob(support, temp_w_mat, problem, risk_aversion = risk_aversion, 
-                                        crit_quant = crit_quant)
-            z_opt[:,j] = temp_z_opt
-        '''
-        #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
-        insample_cost[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
+        
+        # Estimate in-sample Regret/ Task loss
+        insample_regret[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
                                      crit_quant = crit_quant)
-        insample_inverse_cost[j] = 1/insample_cost[j]
+        
+        # Estimate in-sample CRPS        
+        temp_CDF = train_prob_list[j].cumsum(1)
+        H_i = 1*np.repeat(y_supp.reshape(1,-1), len(comb_trainY), axis = 0)>=comb_trainY.values.reshape(-1,1)
+        in_sample_CRPS[j] =  np.square(temp_CDF - H_i).mean()
+        
+        # In-sample regularized cost
+        if regularization_gamma =='inf':
+            insample_cost_regularized[j] = in_sample_CRPS[j]
+        else:
+            insample_cost_regularized[j] = insample_regret[j] + regularization_gamma*in_sample_CRPS[j]            
 
+        insample_inverse_cost[j] = 1/insample_cost_regularized[j]
+    
+    # Find lambdas
     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
 
@@ -747,6 +749,7 @@ for tup in tuple_list[row_counter:]:
         # In-sample performance estimate CRPS
         print('CRPS')
         for j, m in enumerate(all_learners): 
+            
             temp_CDF = train_p_list[j].cumsum(1)
             H_i = 1*np.repeat(y_supp.reshape(1,-1), len(comb_trainY), axis = 0)>=comb_trainY.values.reshape(-1,1)
             
@@ -865,13 +868,14 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
     
     #!!!!!!!!!!!! Add regularization here 
-    
+    #%%
     # Inverse Performance-based weights (invW in the paper)
-    lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, problem = target_problem,
-                                                 crit_quant = critical_fractile, 
-                                                 support = y_supp, risk_aversion = risk_aversion)
-    
-    lambda_static_dict['Insample'] = lambda_tuned_inv    
+    for g in (config['gamma_list'] + ['inf']):
+        lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, train_p_list, regularization_gamma=g, problem = target_problem,
+                                                     crit_quant = critical_fractile, support = y_supp, risk_aversion = risk_aversion)
+        
+        lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
+        
     #%%
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
     # *** This method is not presented in the paper ***
