@@ -489,7 +489,7 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [3] # select solar plant from GEFCom2014 data set
+    params['target_zone'] = [2] # select solar plant from GEFCom2014 data set
     
     # Problem parameters        
     params['crit_quant'] = np.arange(0.1  , 1, 0.1).round(2)
@@ -497,7 +497,7 @@ def params():
 
     params['save'] = True # If True, then saves models and results
     params['train_static'] = True
-    params['train_adaptive'] = False
+    params['train_adaptive'] = True
     
     return params
 
@@ -745,7 +745,7 @@ for tup in tuple_list[row_counter:]:
                 train_p_list.append(wemp_to_support(train_w_dict[learner], trainY.values, y_supp))
                 test_p_list.append(wemp_to_support(test_w_dict[learner], trainY.values, y_supp))
         
-        #%%
+        
         # In-sample performance estimate CRPS
         print('CRPS')
         for j, m in enumerate(all_learners): 
@@ -762,7 +762,7 @@ for tup in tuple_list[row_counter:]:
         
         CRPS = np.square(temp_CDF - H_i).mean()
         print(f'OLP:{CRPS}')
-        #%% In-sample task loss performance     
+        #% In-sample task loss performance     
         print('In-sample task loss')
         for j, m in enumerate(all_learners):
             # Combine PDFs for each observation
@@ -784,7 +784,7 @@ for tup in tuple_list[row_counter:]:
         print(f'Task loss:{temp_decision_cost}')        
 
 
-        #%%
+        #
         # Evaluate probabilistic forecast using Quantile Score 
         print('QS')
         target_quant = np.arange(.01, 1, .01)
@@ -802,7 +802,7 @@ for tup in tuple_list[row_counter:]:
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         plt.savefig(f'{cd}\\plots\\quantile_score_solar_forecast.pdf')
         plt.show()
-        #%%
+        #%
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -818,7 +818,7 @@ for tup in tuple_list[row_counter:]:
         
 
         N_experts = len(all_learners)
-    #%% ########### Static combinations 
+    #% ########### Static combinations 
     train_targetY = comb_trainY.values.reshape(-1)
     
     # Supervised learning set as tensors for PyTorch
@@ -868,7 +868,7 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
     
     #!!!!!!!!!!!! Add regularization here 
-    #%%
+    #%
     # Inverse Performance-based weights (invW in the paper)
     for g in (config['gamma_list'] + ['inf']):
         lambda_tuned_inv, _ = insample_weight_tuning(train_targetY, trainZopt, train_p_list, regularization_gamma=g, problem = target_problem,
@@ -876,7 +876,7 @@ for tup in tuple_list[row_counter:]:
         
         lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
         
-    #%%
+    #%
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
     # *** This method is not presented in the paper ***
     lambda_ = averaging_decisions(train_targetY, trainZopt, target_problem, crit_fract = critical_fractile,
@@ -884,7 +884,7 @@ for tup in tuple_list[row_counter:]:
 
     lambda_static_dict['SalvaBench'] = lambda_
 
-    #%%    
+    #%
     ###### CRPS learning (optimized once)
     train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 512, shuffle = False)
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512, shuffle = False)
@@ -896,14 +896,14 @@ for tup in tuple_list[row_counter:]:
         optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = 1e-2)
         lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25)
         
-        #%%
+        #%
         # Sanity check: assess in-sample perfomrance
         # lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp)
 
-    #%%
+    #%
     lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
 
-    #%%
+    #%
     ##### Decision-focused learning combination for different values of gamma  
     from torch_layers_functions import *
      
@@ -935,7 +935,7 @@ for tup in tuple_list[row_counter:]:
         #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
         # else:
         #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
-#%%
+#%
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
@@ -952,7 +952,7 @@ for tup in tuple_list[row_counter:]:
         # with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static_dict.pickle', 'rb') as handle:
         #     lambda_static_dict = pickle.load(handle)
 
-    #%%
+    #%
     ### Adaptive/ Conditional combinations: linear pool weights adapt to contextual information
     
     train_adapt_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainX, tensor_trainY], batch_size = batch_size, shuffle = False)
@@ -965,7 +965,7 @@ for tup in tuple_list[row_counter:]:
     adaptive_models_dict = {}
     
     num_epochs = 500
-    #%%
+    #%
     ####### Train Conditional/Adaptive Combination models
     if config['train_adaptive'] == True:
         ### CRPS Learning - Linear Regression
@@ -993,7 +993,7 @@ for tup in tuple_list[row_counter:]:
         
         # with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'rb') as handle:
         #     adaptive_models_dict = pickle.load(handle)
-        #%%
+        #%
         ### Conditional combination of weighted decisions ***these do not appear in the paper***
         train_dec_data_loader = create_data_loader([tensor_trainZopt, tensor_trainX, tensor_trainY], batch_size = batch_size, shuffle = False)
         valid_dec_data_loader = create_data_loader([tensor_validZopt, tensor_validX, tensor_validY], batch_size = batch_size, shuffle = False)
@@ -1019,7 +1019,7 @@ for tup in tuple_list[row_counter:]:
             with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'wb') as handle:
                 pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
         
-        #%%
+        #%
         ### Decision-focused Learning - Linear Regression + MLP models over all values of gamma
         from torch_layers_functions import *
         
@@ -1033,28 +1033,28 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lr_lpool_newsv_model.parameters(), lr = 1e-2)
             lr_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 500, patience = 10, relative_tolerance = 0, validation = True)
+                                                  optimizer, epochs = 250, patience = 10, relative_tolerance = 0, validation = True)
             
             
             adaptive_models_dict[f'DF-LR_{gamma}'] = lr_lpool_newsv_model
-    
+
             torch.manual_seed(0)        
 
             mlp_lpool_newsv_model = AdaptiveLinearPoolNewsvendorLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [20,20,20], 
                                                                      output_size = N_experts, support = torch.FloatTensor(y_supp), 
-                                                                     gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion, apply_softmax = True, regularizer=None)
+                                                                     gamma = gamma, critic_fract = critical_fractile, risk_aversion = risk_aversion)
             
             optimizer = torch.optim.Adam(mlp_lpool_newsv_model.parameters(), lr = 1e-2)
             mlp_lpool_newsv_model.train_model(train_adapt_data_loader, valid_adapt_data_loader, 
-                                                  optimizer, epochs = 500, patience = 10, projection = False, relative_tolerance = 0, validation = True)
+                                                  optimizer, epochs = 250, patience = 10, relative_tolerance = 0, validation = True)
     
             adaptive_models_dict[f'DF-MLP_{gamma}'] = mlp_lpool_newsv_model
-    
+
         if config['save']:
             with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'wb') as handle:
                 pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    #%% Performance evaluation
+    #% Performance evaluation
 
     static_models = list(lambda_static_dict) 
     adaptive_models = list(adaptive_models_dict.keys())
