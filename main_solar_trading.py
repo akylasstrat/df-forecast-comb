@@ -489,10 +489,10 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2] # select solar plant from GEFCom2014 data set
+    params['target_zone'] = [1] # select solar plant from GEFCom2014 data set
     
     # Problem parameters        
-    params['crit_quant'] = np.arange(0.1  , 1, 0.1).round(2)
+    params['crit_quant'] = np.arange(0.4  , 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
     params['save'] = True # If True, then saves models and results
