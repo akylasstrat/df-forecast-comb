@@ -84,18 +84,18 @@ qs_cost.reset_index(inplace = True)
 lambda_static = pd.read_csv(f'{cd}\\results\\solar_trading_results\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
 
 fig, ax  = plt.subplots()
-lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']].plot(kind='bar', ax = ax)
+lambda_static[['Ave', 'invW-0', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']].plot(kind='bar', ax = ax)
 plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
 plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0', '$\mathtt{DFL}$-0.1', 
             '$\mathtt{DFL}$-1'], ncol = 2)
 plt.xlabel('Component forecasts')
 plt.ylabel('Combination weights $\mathtt{\lambda}$')
-plt.savefig(f'{cd}\\plots\\lambda_barplot_trading.pdf')
+if config['save']:  plt.savefig(f'{cd}\\plots\\lambda_barplot_trading.pdf')
 plt.show()
 
 #%%
 gamma = [0, 0.1, 1]
-static_models = ['knn','cart_date', 'rf', 'Ave', 'Insample', 'SalvaBench', 'CRPS'] + [f'DF_{g}' for g in gamma]
+static_models = ['knn','cart_date', 'rf', 'Ave', 'invW-0', 'SalvaBench', 'CRPS'] + [f'DF_{g}' for g in gamma]
 adaptive_models = ['CRPS-LR', 'CRPS-MLP', 'SalvaBench-LR','SalvaBench-MLP', 'DF-LR_0', 'DF-MLP_0', 'DF-LR_0.1', 'DF-MLP_0.1','DF-LR_1', 'DF-MLP_1']
 solo_models = ['knn', 'cart','cart_date', 'rf']
 
@@ -187,6 +187,5 @@ ax2.get_yaxis().set_visible(False)
 lgd1 = ax.legend(loc=(0.01, 0.6))
 lgd2 = ax2.legend(loc=(0.25, 0.6))
 ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-
-plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
+if config['save']:  plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
 plt.show()
