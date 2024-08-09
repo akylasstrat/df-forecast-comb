@@ -493,19 +493,27 @@ patience = 10
 train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
 
 #### CRPS Learning, gradient-based approach with torch layer
-lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                       apply_softmax = True)
-optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-                             projection = True)
+lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
+optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = 1e-2)
+lpool_crps_model.train_model(train_data_loader, train_data_loader, optimizer, epochs = 500, patience = 25)
+
+lambda_crps = lpool_crps_model.weights.detach().numpy()
+
+#### CRPS Learning, gradient-based approach with torch layer
+# lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
+#                                        apply_softmax = True)
+# optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
+# lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
+#                              projection = True)
 
 
-lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
+# lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
 
 print(lambda_crps)
 #lambda_crps = crps_learning_combination(Y_tail, [p1_hat, p2_hat], support = y_supp, verbose = 1)
 lambda_static_dict['CRPS'] = lambda_crps
 #%% Decision-focused learning
+from torch_layers_functions import *
 
 # optimization problem parameters
 target_problem = config['problem']
@@ -518,18 +526,41 @@ learning_rate = 1e-2
 num_epochs = 100
 patience = 5
 
-# iterate over values of gamma
-for gamma in [0]:
+for gamma in [0, 0.1, 1]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                gamma = gamma, problem = target_problem, critic_fract = critical_fractile, apply_softmax = True, 
-                                                risk_aversion = regularization)
+                                                gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = regularization,
+                                                projection_simplex = True)
     
-    optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
+    optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = 1e-2)
     
-    lpool_newsv_model.train_model(train_data_loader, [], optimizer, epochs = num_epochs, patience = patience, projection = False, validation = False, relative_tolerance = 0)
+    lpool_newsv_model.train_model(train_data_loader, train_data_loader, optimizer, epochs = num_epochs, 
+                                      patience = patience, validation = False, relative_tolerance = 1e-5)
 
-    lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+    
+    lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.weights.detach().numpy()
+
+    print('Weights')
+    print(lambda_static_dict[f'DF_{gamma}'])
+    # if apply_softmax:
+    #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
+    # else:
+    #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
+#%
+
+
+# iterate over values of gamma
+# for gamma in [0]:
+    
+#     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
+#                                                 gamma = gamma, problem = target_problem, critic_fract = critical_fractile, apply_softmax = True, 
+#                                                 risk_aversion = regularization)
+    
+#     optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
+    
+#     lpool_newsv_model.train_model(train_data_loader, [], optimizer, epochs = num_epochs, patience = patience, projection = False, validation = False, relative_tolerance = 0)
+
+#     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
 
 #%%
 

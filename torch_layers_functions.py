@@ -492,10 +492,13 @@ class LinearPoolNewsvendorLayer(nn.Module):
             
             pinball_loss_expr = cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))
             newsv_cost = prob_weights@pinball_loss_expr
-            
+            # print(newsv_cost.shape)
+            # print((self.support - z).shape)
+            # print((cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))).shape)
+
             # define aux variable
-            #w_error = cp.multiply(prob_weights, error)
-            #sq_error = cp.power(error, 2)
+            # w_error = cp.multiply(prob_weights, error)
+            # sq_error = cp.power(error, 2)
             w_error = cp.multiply(sqrt_prob_weights, error)
             l2_regularization = cp.sum_squares(w_error)
             
