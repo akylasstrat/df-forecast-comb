@@ -60,6 +60,105 @@ def simplex_projection_func(torch_model, w_init):
     w_proj = torch.maximum(w_init + dual_mu, torch.zeros_like(w_init))
     return w_proj
 
+class MLP(nn.Module):        
+    def __init__(self, input_size, hidden_sizes, output_size, activation=nn.ReLU(), constrain_output = True):
+        super(MLP, self).__init__()
+        """
+        Standard MLP for regression
+        Args:
+            input_size, hidden_sizes, output_size: standard arguments for declaring an MLP
+            
+            output_size: equal to the number of combination weights, i.e., number of experts we want to combine
+            sigmoid_activation: enable sigmoid function as a final layer, to ensure output is in [0,1]
+            
+        """
+        # Initialize learnable weight parameters
+        self.num_features = input_size
+        self.output_size = output_size
+        self.constrain_output = constrain_output
+        
+        # create sequential model
+        layer_sizes = [input_size] + hidden_sizes + [output_size]
+        layers = []
+        for i in range(len(layer_sizes) - 1):
+            layers.append(nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
+            if i < len(layer_sizes) - 2:
+                layers.append(activation)
+        
+        if self.constrain_output:
+            layers.append(activation)
+        self.model = nn.Sequential(*layers)
+                    
+    def forward(self, x):
+        """
+        Forward pass
+        Args:
+            x: input tensors/ features
+        """
+        return self.model(x)
+
+    def predict(self, x):
+        # used for inference only
+        with torch.no_grad():            
+            return self.model(x).detach().numpy()
+            
+    def estimate_loss(self, y_hat, y_target):
+        
+        # estimate custom loss function, *elementwise*
+        mse_i = torch.square(y_target - y_hat)        
+        loss_i = torch.sum(mse_i, 1)
+        return loss_i
+    
+    def epoch_train(self, loader, opt=None):
+        """Standard training/evaluation epoch over the dataset"""
+        total_loss = 0.
+        
+        for X,y in loader:
+            
+            y_hat = self.forward(X)
+
+            #loss = nn.MSELoss()(yp,y)
+            loss_i = self.estimate_loss(y_hat, y)                    
+            loss = torch.mean(loss_i)
+            
+            if opt:
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+            total_loss += loss.item() * X.shape[0]
+            
+        return total_loss / len(loader.dataset)
+
+            
+    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, verbose = 0):
+        
+        # best_train_loss = float('inf')
+        best_val_loss = float('inf')
+        early_stopping_counter = 0
+        best_weights = copy.deepcopy(self.state_dict())
+
+        for epoch in range(epochs):
+            # activate train functionality
+            self.train()
+            
+            average_train_loss = self.epoch_train(train_loader, optimizer)
+            val_loss = self.epoch_train(val_loader)
+            
+            if verbose != -1:
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_weights = copy.deepcopy(self.state_dict())
+                early_stopping_counter = 0
+            else:
+                early_stopping_counter += 1
+                if early_stopping_counter >= patience:
+                    print("Early stopping triggered.")
+                    # recover best weights
+                    self.load_state_dict(best_weights)
+                    return
+                
 class AdaptiveLinearPoolDecisions(nn.Module):        
     def __init__(self, input_size, hidden_sizes, output_size, 
                  support, problem = 'reg_trad', activation=nn.ReLU(), apply_softmax = True, critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
@@ -702,6 +801,156 @@ class LinearPoolNewsvendorLayer(nn.Module):
             
         return total_loss / len(data_loader.dataset)
 
+class LinearPool_VFA_Layer(nn.Module):        
+    def __init__(self, approx_model, num_inputs, support, gamma, problem = 'reg_trad', projection_simplex = True, 
+                 critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
+        super(LinearPool_VFA_Layer, self).__init__()
+
+        # Initialize learnable weight parameters
+        #self.weights = nn.Parameter(torch.rand(num_inputs), requires_grad=True)
+        self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
+        self.num_inputs = num_inputs
+        self.support = support
+        self.risk_aversion = risk_aversion
+        self.gamma = gamma
+        self.vfa_model = approx_model
+        # self.apply_softmax = apply_softmax
+        self.projection_simplex = projection_simplex
+        self.regularizer = regularizer
+        self.crit_fract = critic_fract
+        self.problem = problem
+
+        n_locations = len(self.support)
+        
+    def forward(self, list_inputs):
+        """
+        Forward pass of the newvendor layer.
+
+        Args:
+            list_inputs: A list of of input tensors/ PDFs.
+
+        Returns:
+            torch.Tensor: The convex combination of input tensors/ combination of PDFs.
+        """
+
+        # Apply the weights element-wise to each input tensor
+        weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+
+        # Perform the convex combination across input vectors
+        combined_pdf = sum(weighted_inputs)            
+        return combined_pdf
+    
+    def simplex_projection(self, w_init):
+        """
+        Projection to unit simplex, closed-form solution
+        Ref: Wang, Weiran, and Miguel A. Carreira-Perpinán. "Projection onto the probability simplex: An efficient algorithm with a simple proof, and an application." arXiv preprint arXiv:1309.1541 (2013).
+        """
+
+        u_sorted, indices = torch.sort(w_init, descending = True)
+        j_ind = torch.arange(1, self.num_inputs + 1)
+        rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
+        dual_mu = 1/rho*(1-u_sorted[:rho].sum())
+        
+        w_proj = torch.maximum(w_init + dual_mu, torch.zeros_like(w_init))
+        return w_proj
+        
+    def train_model(self, train_loader, val_loader, optimizer, epochs = 20, patience=5, validation = False, 
+                    relative_tolerance = 0):
+        """
+        Run gradient-descent algorithm for model training
+        """
+        
+        # Initialize training loss and placeholder variables        
+        print('Initialize loss...')
+        
+        best_train_loss = self.epoch_train(train_loader)
+        # best_train_loss = float('inf')
+        best_val_loss = float('inf')
+        early_stopping_counter = 0
+        best_weights = copy.deepcopy(self.state_dict())
+                
+        for epoch in range(epochs):
+            
+            print('Current weights')
+            print(self.weights)
+            
+            
+            if validation == False:
+                # only check performance on training data
+                average_train_loss = self.epoch_train(train_loader, optimizer)
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} ")
+    
+                if (average_train_loss < best_train_loss) and ( (best_train_loss-average_train_loss)/best_train_loss > relative_tolerance):
+                    best_train_loss = average_train_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                    
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        return
+                    
+            elif validation == True:
+                
+                average_train_loss = self.epoch_train(train_loader, optimizer)
+                val_loss = self.epoch_train(val_loader)
+
+                print(f"Epoch [{epoch + 1}/{epochs}] - Train Loss: {average_train_loss:.4f} - Val Loss: {val_loss:.4f}")
+    
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_weights = copy.deepcopy(self.state_dict())
+                    early_stopping_counter = 0
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= patience:
+                        print("Early stopping triggered.")
+                        # recover best weights
+                        self.load_state_dict(best_weights)
+                        break
+                
+                
+    def epoch_train(self, data_loader, opt=None):
+        """Standard training/evaluation epoch over the dataset"""
+        # evaluate loss criterion/ used for estimating validation loss
+        total_loss = 0.0
+
+        w = torch.FloatTensor(self.vfa_model.model[0].weight.detach().numpy())
+        bias = torch.FloatTensor(self.vfa_model.model[0].bias.detach().numpy())
+        
+        for batch_data in data_loader:
+            y_batch = batch_data[-1]
+
+            # forward pass: combine forecasts and solve each newsvendor problem
+            pdf_comb_hat = self.forward(batch_data[:-1])
+            
+            cdf_comb_hat = pdf_comb_hat.cumsum(1)
+                                        
+            # crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
+            crps_i = torch.sum(torch.square( cdf_comb_hat - 1*(self.support >= y_batch.reshape(-1,1))), 1).reshape(-1,1)
+                            
+            # loss_i = self.vfa_model.forward(pdf_comb_hat)
+            loss_i = pdf_comb_hat@w.T + bias
+                
+            loss = torch.mean(loss_i)
+            
+            if opt:
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                                
+                if self.projection_simplex == True:
+                    w_proj = self.simplex_projection(self.weights.clone())
+                    with torch.no_grad():
+                        self.weights.copy_(torch.FloatTensor(w_proj))
+                    
+            total_loss += loss.item() * y_batch.shape[0]
+            
+        return total_loss / len(data_loader.dataset)
+    
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
                  gamma, regularization = 0, projection_simplex = True, apply_softmax = False, initial_weights = None, clearing_type = 'det', include_network = False, 
@@ -1288,6 +1537,8 @@ class LinearPoolCRPSLayer(nn.Module):
                     early_stopping_counter += 1
                     if early_stopping_counter >= patience:
                         print("Early stopping triggered.")
+                        print(self.weights)
+                        print(best_weights)
                         # recover best weights
                         self.load_state_dict(best_weights)
                         return

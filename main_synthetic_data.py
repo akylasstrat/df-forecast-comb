@@ -33,8 +33,58 @@ plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
-def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
-                           support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
+# def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
+#                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
+#     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
+#         set weights based on inverse cost (or could use softmax activation)
+#         - Args:
+#             target_y: realizations of uncertainty
+#             prob_vectors: list of predictive PDFs
+#             crit_fract: critical fractile for newsvendor problem
+#             support: support locations
+#         - Output:
+#             lambdas_inv: weights based on inverse in-sample performance'''
+    
+#     n_obs = train_z_opt
+#     n_models = train_z_opt.shape[1]
+    
+#     risk_aversion = kwargs['risk_aversion']
+#     crit_quant = kwargs['crit_quant']
+#     ### Find optimal decisions under perfect foresight information
+    
+#     print('Solve in-sample stochastic problems...')
+    
+#     #z_opt = np.zeros((n_obs, n_models))
+#     insample_cost = np.zeros((n_models))
+#     insample_inverse_cost = np.zeros((n_models))
+
+#     for j in range(n_models):
+#         '''
+#         if problem == 'newsvendor':
+#             for i in range(n_obs):
+#                 # Solve stochastic problem, find decision
+#                 z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
+#             # Estimate decision cost (regret)
+#         elif problem == 'reg_trad':
+            
+#             temp_w_mat = np.array(prob_vectors[j])
+
+#             temp_z_opt = solve_opt_prob(support, temp_w_mat, problem, risk_aversion = risk_aversion, 
+#                                         crit_quant = crit_quant)
+#             z_opt[:,j] = temp_z_opt
+#         '''
+#         #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
+#         insample_cost[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
+#                                      crit_quant = crit_quant)
+#         insample_inverse_cost[j] = 1/insample_cost[j]
+
+#     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
+#     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
+
+#     return lambdas_inv, lambdas_softmax
+
+def insample_weight_tuning(target_y, train_z_opt, train_prob_list, problem = 'newsvendor', 
+                           support = np.arange(0, 1.01, .01).round(2), regularization_gamma = 0, verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
         set weights based on inverse cost (or could use softmax activation)
         - Args:
@@ -55,34 +105,36 @@ def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor',
     print('Solve in-sample stochastic problems...')
     
     #z_opt = np.zeros((n_obs, n_models))
-    insample_cost = np.zeros((n_models))
     insample_inverse_cost = np.zeros((n_models))
-
+    insample_regret = np.zeros((n_models))
+    in_sample_CRPS = np.zeros((n_models))
+    insample_cost_regularized = np.zeros((n_models))
+    
     for j in range(n_models):
-        '''
-        if problem == 'newsvendor':
-            for i in range(n_obs):
-                # Solve stochastic problem, find decision
-                z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
-            # Estimate decision cost (regret)
-        elif problem == 'reg_trad':
-            
-            temp_w_mat = np.array(prob_vectors[j])
-
-            temp_z_opt = solve_opt_prob(support, temp_w_mat, problem, risk_aversion = risk_aversion, 
-                                        crit_quant = crit_quant)
-            z_opt[:,j] = temp_z_opt
-        '''
-        #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
-        insample_cost[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
+        
+        # Estimate in-sample Regret/ Task loss
+        insample_regret[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
                                      crit_quant = crit_quant)
-        insample_inverse_cost[j] = 1/insample_cost[j]
+        
+        # Estimate in-sample CRPS        
+        temp_CDF = train_prob_list[j].cumsum(1)
+        H_i = 1*np.repeat(y_supp.reshape(1,-1), len(target_y), axis = 0)>=target_y.reshape(-1,1)
+        in_sample_CRPS[j] =  np.square(temp_CDF - H_i).mean()
+        
+        # In-sample regularized cost
+        if regularization_gamma =='inf':
+            insample_cost_regularized[j] = in_sample_CRPS[j]
+        else:
+            insample_cost_regularized[j] = insample_regret[j] + regularization_gamma*in_sample_CRPS[j]            
 
+        insample_inverse_cost[j] = 1/insample_cost_regularized[j]
+    
+    # Find lambdas
     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
 
     return lambdas_inv, lambdas_softmax
-                
+
 def task_loss(pred, actual, problem, **kwargs):
     'Estimates task loss for different problems'
 
@@ -347,8 +399,8 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
     elif problem =='mse':
         return (target_scen@weights)
  
-def nn_params():
-    'Adam optimizer hyperparameters'
+def GD_params():
+    'Gradient Descent hyperparameters'
     nn_params = {}
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
@@ -361,39 +413,134 @@ def params():
     ''' Set up the experiment parameters'''
 
     params = {}
-    
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
-    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
-    params['gamma_list'] = [0, 0.1, 1]
-        
-    params['crit_quant'] = np.arange(0.5, 1, 0.1).round(2)
-    params['risk_aversion'] = [0.2]
-
+    params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['gamma_list'] = [0, 0.1, 1]    
+    params['crit_quant'] = 0.2
+    
     return params
 
 #%%
    
 config = params()
-nn_hparam = nn_params()
+# GD_hparam = GD_params()
 
 results_path = f'{cd}\\results\\synthetic_data'
 data_path = f'{cd}\\data'
 
 #%% 
 
+# # experiment parameters
+# nobs_train = 500
+# nobs_test = 500
+# nobs = nobs_train + nobs_test
+# # fixed term to ensure everything is non-negative
+# # ** Does not affect the results, only to speed up computations with nonnegativity of parameters
+# bias_term = 15
+
+# y_supp = np.arange(-15, 7, 0.1).round(1) + bias_term
+# n_locs = len(y_supp)
+# target_quant = np.arange(0.01, 1, 0.01).round(2)
+
+# alpha_1 = 1.2
+# alpha_2 = 1.2
+# alpha_3 = 4.5
+
+# beta = -1.3
+
+# X0 = np.random.normal(loc = bias_term, scale = 1, size = nobs).round(1)
+# X1 = np.random.normal(size = nobs, scale = 1).round(1)
+# X2 = np.random.normal(size = nobs, scale = 1).round(1)
+# X3 = np.random.normal(size = nobs).round(1)
+# error = np.random.normal(scale = 0.25, size = nobs).round(1)
+
+# P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
+
+# Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta) # + error
+
+# Y = Y.round(2)
+# Y = projection(Y, ub = y_supp.max(), lb = y_supp.min())
+
+# Y_train = Y[:nobs_train]
+# Y_test = Y[nobs_train:]
+
+# plt.hist(Y_train, bins = 50)
+# plt.show()
+
+# ### Expert forecasts for both training and test set
+# # Expert 1: Access to features 1&2
+# p1_hat = np.zeros((nobs, n_locs))
+# F1_hat = np.zeros((nobs, n_locs))
+# Q1_hat = np.zeros((nobs, len(target_quant)))
+
+# for i in range(nobs):
+#     # define probabilistic forecast
+#     f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i], scale = 0.5)
+        
+#     p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
+#     F1_hat[i] = f1_hat_temp.cdf(y_supp)
+#     Q1_hat[i] = f1_hat_temp.ppf(target_quant)
+    
+
+# # Expert 2: Access to feature 3/ calibrated probabilistic forecast **only** on the left tail
+# p2_hat = np.zeros((nobs, n_locs))
+# F2_hat = np.zeros((nobs, n_locs))
+# Q2_hat = np.zeros((nobs, len(target_quant)))
+
+# for i in range(nobs):
+
+#     if X3[i] < beta:           
+#         f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = 1)
+#     else:
+#         f2_hat_temp = norm(loc = X0[i], scale = 0.5)
+        
+#     p2_hat[i] = f2_hat_temp.pdf(y_supp)*0.1
+#     F2_hat[i] = f2_hat_temp.cdf(y_supp)
+#     Q2_hat[i] = f2_hat_temp.ppf(target_quant)
+
+# # evaluate probabilistic predictions
+
+# pinball_1 = 100*pinball(Q1_hat[:nobs_train], Y_train, target_quant).round(4)
+# pinball_2 = 100*pinball(Q2_hat[:nobs_train], Y_train, target_quant).round(4)
+
+# plt.plot(pinball_1, label = 'Expert 1')
+# plt.plot(pinball_2, label = 'Expert 2')
+# plt.show()
+
+# print('Average Pinball Loss')
+# print(f'Expert 1:{pinball_1.mean()}')
+# print(f'Expert 2:{pinball_2.mean()}')
+
+# for i in range(20):
+#     plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
+#     plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
+#     plt.plot(Y_train[i], 0, 'o')
+#     plt.legend()
+#     plt.show()
+
+#%% Generate synthetic data
+
+
+np.random.seed(0)
+
 # experiment parameters
 nobs_train = 5000
 nobs_test = 5000
 nobs = nobs_train + nobs_test
+critical_fractile = config['crit_quant']
+
+print(f'Newsvendor problem with critical quantile:{critical_fractile}')
+
+print('Generate synthetic data')
 # fixed term to ensure everything is non-negative
 # ** Does not affect the results, only to speed up computations with nonnegativity of parameters
 bias_term = 15
 
-y_supp = np.arange(-15, 7, 0.1).round(1) + bias_term
+y_supp = np.arange(-20, 20, 0.1).round(1) + bias_term # support of discrete distribution
 n_locs = len(y_supp)
-target_quant = np.arange(0.01, 1, 0.01).round(2)
+target_quant = np.arange(0.01, 1, 0.01).round(2) # quantiles to evaluate CRPS or pinball loss
 
 alpha_1 = 1.2
 alpha_2 = 1.2
@@ -405,11 +552,11 @@ X0 = np.random.normal(loc = bias_term, scale = 1, size = nobs).round(1)
 X1 = np.random.normal(size = nobs, scale = 1).round(1)
 X2 = np.random.normal(size = nobs, scale = 1).round(1)
 X3 = np.random.normal(size = nobs).round(1)
-error = np.random.normal(scale = 0.25, size = nobs).round(1)
+error = np.random.normal(scale = 1, size = nobs).round(1)
 
 P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
 
-Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta)# + error
+Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta) # + error
 
 Y = Y.round(2)
 Y = projection(Y, ub = y_supp.max(), lb = y_supp.min())
@@ -417,6 +564,7 @@ Y = projection(Y, ub = y_supp.max(), lb = y_supp.min())
 Y_train = Y[:nobs_train]
 Y_test = Y[nobs_train:]
 
+# Visualize data
 plt.hist(Y_train, bins = 50)
 plt.show()
 
@@ -428,7 +576,7 @@ Q1_hat = np.zeros((nobs, len(target_quant)))
 
 for i in range(nobs):
     # define probabilistic forecast
-    f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i], scale = 0.5)
+    f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i], scale = 1)
         
     p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
     F1_hat[i] = f1_hat_temp.cdf(y_supp)
@@ -443,16 +591,16 @@ Q2_hat = np.zeros((nobs, len(target_quant)))
 for i in range(nobs):
 
     if X3[i] < beta:           
-        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = 0.5)
+        f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = 1)
     else:
-        f2_hat_temp = norm(loc = X0[i], scale = 0.5)
+        f2_hat_temp = norm(loc = X0[i], scale = 1)
+
         
     p2_hat[i] = f2_hat_temp.pdf(y_supp)*0.1
     F2_hat[i] = f2_hat_temp.cdf(y_supp)
     Q2_hat[i] = f2_hat_temp.ppf(target_quant)
 
 # evaluate probabilistic predictions
-
 pinball_1 = 100*pinball(Q1_hat[:nobs_train], Y_train, target_quant).round(4)
 pinball_2 = 100*pinball(Q2_hat[:nobs_train], Y_train, target_quant).round(4)
 
@@ -463,15 +611,48 @@ plt.show()
 print('Average Pinball Loss')
 print(f'Expert 1:{pinball_1.mean()}')
 print(f'Expert 2:{pinball_2.mean()}')
-#%%
-for i in range(20):
-    plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
-    plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
-    plt.plot(Y_train[i], 0, 'o')
-    plt.legend()
-    plt.show()
+
+print('Pinball loss at critical quantile')
+print(f'Expert 1:{pinball_1[np.where(target_quant == 0.20)[0]]}')
+print(f'Expert 2:{pinball_2[np.where(target_quant == 0.20)[0]]}')
+
+# for i in range(20):
+#     plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
+#     plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
+#     plt.plot(Y_train[i], 0, 'o')
+#     plt.legend()
+#     plt.show()
+
+# Check in-sample performance of each expert for sanity check 
+# print('In-sample performance')
+
+# for j, temp_pdf in enumerate([p1_hat[:nobs_train], p2_hat[:nobs_train]]):
+
+#     temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, 'newsvendor', risk_aversion = 0, crit_quant = 0.2)
+               
+#     # Estimate task-loss for specific model
+#     temp_Decision_cost = 100*task_loss(temp_prescriptions.reshape(-1,1), Y_train, 'newsvendor', crit_quant = 0.2, risk_aversion = 0)
+    
+#     # Evaluate QS (approximation of CRPS) for each model
+#     # find quantile forecasts
+#     temp_q_forecast = np.array([inverted_cdf([0.2], y_supp, temp_pdf[i]) for i in range(nobs_train)])
+#     temp_qs = 100*pinball(temp_q_forecast, Y_train, [0.2]).round(4)
+    
+#     temp_CDF = temp_pdf.cumsum(1)
+#     H_i = 1*np.repeat(y_supp.reshape(1,-1), len(Y_train), axis = 0) >= Y_train.reshape(-1,1)
+    
+#     CRPS = np.square(temp_CDF - H_i).sum(1).mean()
+
+#     print(f'Expert {j+1}')
+#     print('Decision Cost')
+#     print(temp_Decision_cost)
+    
+#     print('CRPS')
+#     print(CRPS.mean().round(4))
+
 
 #%% CRPS learning
+
 train_p_list = [p1_hat[:nobs_train], p2_hat[:nobs_train]]
 N_experts = 2
 lambda_static_dict = {}
@@ -490,35 +671,23 @@ learning_rate = 1e-2
 num_epochs = 100
 patience = 10
 
-train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size)
+train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
 
 #### CRPS Learning, gradient-based approach with torch layer
 lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
 optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = 1e-2)
 lpool_crps_model.train_model(train_data_loader, train_data_loader, optimizer, epochs = 500, patience = 25)
-
 lambda_crps = lpool_crps_model.weights.detach().numpy()
 
-#### CRPS Learning, gradient-based approach with torch layer
-# lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-#                                        apply_softmax = True)
-# optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
-# lpool_crps_model.train_model(train_data_loader, optimizer, epochs = num_epochs, patience = patience, 
-#                              projection = True)
+print(f'CRPSL weights:{lambda_crps}')
 
-
-# lambda_crps = to_np(torch.nn.functional.softmax(lpool_crps_model.weights))
-
-print(lambda_crps)
-#lambda_crps = crps_learning_combination(Y_tail, [p1_hat, p2_hat], support = y_supp, verbose = 1)
 lambda_static_dict['CRPS'] = lambda_crps
 #%% Decision-focused learning
 from torch_layers_functions import *
 
 # optimization problem parameters
-target_problem = config['problem']
 critical_fractile = 0.2
-regularization = 0.01 # to help convergence of the gradient-descent
+regularization = 0.001 # Small regularization to help convergence of gradient-based algo
 
 # Optimizer hyperparameters
 batch_size = 500
@@ -526,10 +695,13 @@ learning_rate = 1e-2
 num_epochs = 100
 patience = 5
 
+train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
+
+# iterate over values of gamma (CRPS regularization)
 for gamma in [0, 0.1, 1]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                                gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = regularization,
+                                                gamma = gamma, problem = 'reg_trad', critic_fract = critical_fractile, risk_aversion = regularization,
                                                 projection_simplex = True)
     
     optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = 1e-2)
@@ -542,50 +714,36 @@ for gamma in [0, 0.1, 1]:
 
     print('Weights')
     print(lambda_static_dict[f'DF_{gamma}'])
-    # if apply_softmax:
-    #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
-    # else:
-    #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
-#%
 
 
-# iterate over values of gamma
-# for gamma in [0]:
-    
-#     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-#                                                 gamma = gamma, problem = target_problem, critic_fract = critical_fractile, apply_softmax = True, 
-#                                                 risk_aversion = regularization)
-    
-#     optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = learning_rate)
-    
-#     lpool_newsv_model.train_model(train_data_loader, [], optimizer, epochs = num_epochs, patience = patience, projection = False, validation = False, relative_tolerance = 0)
+#%% # Inverse Performance-based weights (invW)
 
-#     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
-
-#%%
-
+# Find optimal in-sample decisions for each expert
 trainZopt = np.zeros((nobs_train, N_experts))
 testZopt = np.zeros((nobs_test, N_experts))
     
 print('Finding optimal decisions in training set')
 for j in range(N_experts):
-    temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = regularization, 
+    temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], 'newsvendor', risk_aversion = 0, 
                                 crit_quant = critical_fractile)
     trainZopt[:,j] = temp_z_opt
+
+# Find weights for each value of gamma (inf: CRPS minimization)
+for g in ([0,0.1,1] + ['inf']):
     
-# Inverse Performance-based weights (invW)
-lambda_tuned_inv, _ = insample_weight_tuning(Y_train, trainZopt, problem = target_problem,
-                                             crit_quant = critical_fractile, support = y_supp, risk_aversion = regularization)
-lambda_static_dict['Insample'] = lambda_tuned_inv    
-
-
+    lambda_tuned_inv, _ = insample_weight_tuning(Y_train, trainZopt, train_p_list, regularization_gamma=g, problem = 'newsvendor',
+                                                 crit_quant = critical_fractile, support = y_supp, risk_aversion = 0)
+    
+    lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
+    
+# Plot learned static weights
 for m in list(lambda_static_dict.keys()):
     plt.plot(lambda_static_dict[m], label = m)
 plt.legend()
 plt.show()
 
 #%% Evaluate results
-#regularization = 0.01
+
 all_models = lambda_static_dict.keys()
 Prescriptions = pd.DataFrame(data = np.zeros((nobs_test, len(all_models))), columns = all_models)
 
@@ -594,11 +752,11 @@ test_Q_list = [Q1_hat[-nobs_test:], Q2_hat[-nobs_test:]]
 
 # Store pinball loss and Decision cost for task-loss
 temp_QS = pd.DataFrame()
-temp_QS['risk_aversion'] = regularization
+temp_QS['risk_aversion'] = 0
 
 temp_Decision_cost = pd.DataFrame()
 temp_Decision_cost['Quantile'] = [critical_fractile]
-temp_Decision_cost['risk_aversion'] = regularization
+temp_Decision_cost['risk_aversion'] = 0
 
 temp_mean_QS = temp_Decision_cost.copy()
 
@@ -611,7 +769,7 @@ for j, m in enumerate(all_models):
     # Combine PDFs for each observation
     temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
 
-    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = regularization,
+    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = 0,
                                         crit_quant = critical_fractile)
        
     Prescriptions[m] = temp_prescriptions
@@ -619,7 +777,7 @@ for j, m in enumerate(all_models):
     # Estimate task-loss for specific model
     #%
     temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, Y_test, 
-                                      target_problem, crit_quant = critical_fractile, risk_aversion = regularization)
+                                      target_problem, crit_quant = critical_fractile, risk_aversion = 0)
     
     # Evaluate QS (approximation of CRPS) for each model
     # find quantile forecasts
@@ -633,6 +791,12 @@ for j, m in enumerate(all_models):
     
     CRPS = np.square(temp_CDF - H_i).sum(1).mean()
     temp_mean_QS[m] = CRPS
+
+    print('Decision Cost')
+    print(temp_Decision_cost[m].mean().round(4))
+    
+    print('CRPS')
+    print(temp_mean_QS[m].mean().round(4))
 
 print('Decision Cost')
 print(temp_Decision_cost[all_models].mean().round(4))
