@@ -10,7 +10,7 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 import sys, os
-#import pickle
+import pickle
 import gurobipy as gp
 import torch
 
@@ -107,7 +107,7 @@ def insample_weight_tuning(grid, target_y, train_z_opt, train_prob_list,
             lambdas_inv: weights based on inverse in-sample performance'''
     
     n_experts = len(train_z_opt)    
-    risk_aversion = kwargs['risk_aversion']
+    # risk_aversion = kwargs['risk_aversion']
     ### Find optimal decisions under perfect foresight information
     
     print('Estimate in-sample task loss...')
@@ -218,8 +218,8 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     rt_sched.addConstr( p_DA + r_up <= grid['Pmax'].reshape(-1))    
     rt_sched.addConstr( r_down <= p_DA)    
 
-    rt_sched.addConstr( r_up <= grid['R_u_max'].reshape(-1))
-    rt_sched.addConstr( r_down <= grid['R_d_max'].reshape(-1))
+    # rt_sched.addConstr( r_up <= grid['R_u_max'].reshape(-1))
+    # rt_sched.addConstr( r_down <= grid['R_d_max'].reshape(-1))
 
     rt_sched.addConstr( G_shed <= grid['Pmax'].reshape(-1))
     rt_sched.addConstr( L_shed <= grid['Pd'].reshape(-1))
@@ -296,9 +296,10 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     stoch_market.addConstrs( p_DA + r_up[:,s] <= grid['Pmax'].reshape(-1) for s in range(n_scen))
     stoch_market.addConstrs( r_down[:,s] <= p_DA for s in range(n_scen))
     
-    stoch_market.addConstr( r_up <= np.tile(grid['R_u_max'].reshape(-1,1), n_scen))
-    stoch_market.addConstr( r_down <= np.tile(grid['R_d_max'].reshape(-1,1), n_scen))
-
+    # stoch_market.addConstr( r_up <= np.tile(grid['R_u_max'].reshape(-1,1), n_scen))
+    # stoch_market.addConstr( r_down <= np.tile(grid['R_d_max'].reshape(-1,1), n_scen))
+    
+    # Slacks for real-time
     stoch_market.addConstr( G_shed <= np.tile(grid['Pmax'].reshape(-1,1), n_scen))
     stoch_market.addConstr( L_shed <= np.tile(grid['Pd'].reshape(-1,1), n_scen))
         
@@ -317,27 +318,19 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     stoch_market.addConstrs( rt_cost[s] == (grid['C_up'])@r_up[:,s] + (-grid['C_down'])@r_down[:,s] + grid['VOLL']*L_shed[:,s].sum() + grid['VOLL']*G_shed[:,s].sum()
                             for s in range(n_scen))
 
-    
-
-    # solve for multiple test observations/ declares gurobi model once for speed up
+    # Declare model once & solve for multiple test observations (speed up)
     n_test_obs = len(weights)
     DA_prescriptions = np.zeros((n_test_obs, grid['n_unit']))
-
     stoch_market.addConstr( w_rt == target_scen)
-
     stoch_market.setObjective( da_cost + t_aux)
-
     
     for row in range(len(weights)):
         if row%1000 == 0: print(row)
         # expected renewable production
         #c1 = stoch_market.addConstr( exp_w == target_scen@weights[row])
         c2 = stoch_market.addConstr( t_aux >= rt_cost@weights[row])
-    
-        stoch_market.optimize()
-        
+        stoch_market.optimize()        
         for constr in [c2]: stoch_market.remove(constr)        
-        
         DA_prescriptions[row] = p_DA.X
         
     return DA_prescriptions
@@ -459,7 +452,7 @@ def nn_params():
     'NN hyperparameters'
     nn_params = {}
     nn_params['patience'] = 10
-    nn_params['batch_size'] = 512  
+    nn_params['batch_size'] = 100  
     nn_params['num_epochs'] = 1500
     nn_params['learning_rate'] = 1e-2
     nn_params['apply_softmax'] = True
@@ -476,7 +469,7 @@ def params():
     params['end_date'] = '2014-01-01'
 
     
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
@@ -497,9 +490,10 @@ config = params()
 hyperparam = tree_params()
 nn_hparam = nn_params()
 
-results_path = f'{cd}\\results\\grid_scheduling'
+# results_path = f'{cd}\\results\\grid_scheduling'
+results_path = f'{cd}\\results\\grid_scheduling_noramp'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/astratig/pglib-opf/'
+pglib_path =  'C:/Users/akyla/pglib-opf/'
 
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
@@ -847,17 +841,17 @@ for tup in tuple_list[row_counter:]:
         
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
-    # Inverse Performance-based weights (invW in the paper)
+    #### Inverse Performance-based weights (invW in the paper)
     for g in (config['gamma_list'] + ['inf']):
-        lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, train_p_list, regularization_gamma=g, problem = target_problem,
-                                                     crit_quant = critical_fractile, support = y_supp, risk_aversion = risk_aversion)
+        lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, train_p_list, regularization_gamma=g, problem = target_problem, 
+                                                     support = y_supp)
         
         lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
     
     # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
     #lambda_ = averaging_decisions(grid, train_targetY, trainZopt, support = y_supp, bounds = False, risk_aversion = risk_aversion)
 
-    lambda_static_dict['Insample'] = lambda_tuned_inv    
+    # lambda_static_dict['Insample'] = lambda_tuned_inv    
     #lambda_static_dict['SalvaBench'] = lambda_
     #%%
     #% CRPS learning
@@ -875,64 +869,55 @@ for tup in tuple_list[row_counter:]:
         lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25, 
                                      validation = False)
 
-        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)        
+        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)  
     lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
+    print(lambda_static_dict['CRPS'])
     
     #%%
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
     patience = 5
     
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 500, shuffle = False)
-    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 500, shuffle = False)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 500, shuffle = False)
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = batch_size, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size, shuffle = False)
     
     #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]    
+    config['gamma_list'] = [0, 0.1, 1]
     for gamma in config['gamma_list']:
         
         lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, clearing_type = 'det', projection_simplex = True)
+                                                 grid = grid, gamma = gamma, clearing_type = 'stoch', projection_simplex = True)
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
-        lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 30, 
+        lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
                                           patience = patience, validation = False, relative_tolerance = 1e-5)
-
-
         lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.weights.detach().numpy()
-        
-        # if apply_softmax:
-        #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_sched_model.weights))
-        # else:
-        #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_sched_model.weights)
-        
+                
         if config['save']:
             lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
             lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
     
-            with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_lambda_static_dict.pickle', 'wb') as handle:
+            with open(f'{results_path}\\{filename_prefix}_lambda_static_dict.pickle', 'wb') as handle:
                 pickle.dump(lambda_static_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
-
-    #%%
-    ### Adaptive combination model    
-    # i) fix val_loader, ii) train for gamma = 0.1, iii) add to dictionary
-    # iv) create one for CRPS only (gamma == +inf)
+    # Evaluate performance on test set
     
-    adaptive_models_dict = {}
-    
-    #% Evaluate performance for all models
-    #%
     static_models = list(lambda_static_dict) 
     
-    adaptive_models = list(adaptive_models_dict.keys())
-    all_models = static_models + adaptive_models
+    # # Adaptive combination model        
+    # adaptive_models_dict = {}   
+    # adaptive_models = list(adaptive_models_dict.keys())
+    # all_models = static_models + adaptive_models
 
-    lambda_adapt_dict = {}
+    all_models = static_models
+    
+    # lambda_adapt_dict = {}
     Prescriptions = {}
         
     temp_RT_cost = pd.DataFrame()
@@ -986,7 +971,10 @@ for tup in tuple_list[row_counter:]:
 
     print('Total Decision Cost')
     print((temp_DA_cost + temp_RT_cost)[all_models].mean().round(4))
-    
+
+    print('Regret')
+    print( ((temp_DA_cost + temp_RT_cost)[all_models] - temp_DA_cost['Perfect'].values[0]).mean().round(4))
+
     print('CRPS')
     print(temp_mean_QS[all_models].mean().round(4))
     
@@ -998,7 +986,8 @@ for tup in tuple_list[row_counter:]:
         DA_cost = temp_DA_cost.copy()
         RT_cost = temp_RT_cost.copy()
         mean_QS = temp_mean_QS.copy()
-
+    
+    config['save'] = True
     if config['save']:
         DA_cost.to_csv(f'{results_path}\\{filename_prefix}_DA_cost.csv')
         RT_cost.to_csv(f'{results_path}\\{filename_prefix}_RT_cost.csv')

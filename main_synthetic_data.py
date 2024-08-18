@@ -769,15 +769,14 @@ for j, m in enumerate(all_models):
     # Combine PDFs for each observation
     temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
 
-    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, target_problem, risk_aversion = 0,
+    temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, 'newsvendor', risk_aversion = 0,
                                         crit_quant = critical_fractile)
        
     Prescriptions[m] = temp_prescriptions
         
     # Estimate task-loss for specific model
     #%
-    temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, Y_test, 
-                                      target_problem, crit_quant = critical_fractile, risk_aversion = 0)
+    temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, Y_test, 'newsvendor', crit_quant = critical_fractile, risk_aversion = 0)
     
     # Evaluate QS (approximation of CRPS) for each model
     # find quantile forecasts
