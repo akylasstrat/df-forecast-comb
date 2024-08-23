@@ -67,21 +67,35 @@ config = params()
 config['save'] = False
 target_prob = 'reg_trad'
 #crit_fract = 0.9
+results_folder = 'solar_trading_results_projection'
 
 decision_cost = []
 qs_cost = []
 for z in ['Z1','Z2', 'Z3']:
-    decision_cost.append(pd.read_csv(f'{cd}\\results\\solar_trading_results\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
-    qs_cost.append(pd.read_csv(f'{cd}\\results\\solar_trading_results\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
+    decision_cost.append(pd.read_csv(f'{cd}\\results\\{results_folder}\\{z}_{target_prob}__Decision_cost.csv', index_col = 0))
+    qs_cost.append(pd.read_csv(f'{cd}\\results\\{results_folder}\\{z}_{target_prob}__mean_QS.csv', index_col = 0))
 
 
 decision_cost = pd.concat(decision_cost)
 decision_cost.reset_index(inplace = True)
 qs_cost = pd.concat(qs_cost)
 qs_cost.reset_index(inplace = True)
+#%%
+target = 'Z3'
+
+cost_df = pd.read_csv(f'{cd}\\results\\solar_trading_results_projection\\{target}_{target_prob}__Decision_cost.csv', index_col = 0)
+crps_df = pd.read_csv(f'{cd}\\results\\solar_trading_results_projection\\{target}_{target_prob}__mean_QS.csv', index_col = 0)
+
+cost_softmax = pd.read_csv(f'{cd}\\results\\solar_trading_results_softmax\\{target}_{target_prob}__Decision_cost.csv', index_col = 0)
+crps_softmax = pd.read_csv(f'{cd}\\results\\solar_trading_results_softmax\\{target}_{target_prob}__mean_QS.csv', index_col = 0)
+
+for s in ['CRPS', 'DF_0', 'DF_0.1', 'DF_1']:
+    cost_df[f'{s}_softmax'] = cost_softmax[s]
+    crps_df[f'{s}_softmax'] = crps_softmax[s]
+
 #%% Plot lambdas for specific combination
 
-lambda_static = pd.read_csv(f'{cd}\\results\\solar_trading_results\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
+lambda_static = pd.read_csv(f'{cd}\\results\\{results_folder}\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
 
 fig, ax  = plt.subplots()
 lambda_static[['Ave', 'invW-0', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']].plot(kind='bar', ax = ax)
@@ -185,7 +199,7 @@ ax2.scatter(np.NaN, np.NaN, marker = 'd', label = '$\mathtt{NN}$', color='gray',
 ax2.get_yaxis().set_visible(False)
 
 lgd1 = ax.legend(loc=(0.01, 0.6))
-lgd2 = ax2.legend(loc=(0.25, 0.6))
+lgd2 = ax2.legend(loc=(0.25, 0.75))
 ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-if config['save']:  plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
+if config['save']:  plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff_projection.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
 plt.show()

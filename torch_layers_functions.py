@@ -437,6 +437,9 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         # Apply the weights element-wise to each input tensor        
         weighted_inputs = [torch.tile(weights[:,i:i+1], (1, input_tensor.shape[1])) * input_tensor for i, input_tensor in enumerate(list_inputs)]
         
+        if self.apply_softmax:
+            self.model.add_module('softmax', nn.Softmax())
+
         # Perform the convex combination across input vectors
         combined_pdf = sum(weighted_inputs)
         
@@ -556,7 +559,7 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
             return self.model(x).detach().numpy()
         
 class LinearPoolNewsvendorLayer(nn.Module):        
-    def __init__(self, num_inputs, support, gamma, problem = 'reg_trad', projection_simplex = True, 
+    def __init__(self, num_inputs, support, gamma, problem = 'reg_trad', feasibility_method = 'projection', 
                  critic_fract = 0.5, regularizer = 'crps', risk_aversion = 0):
         super(LinearPoolNewsvendorLayer, self).__init__()
 
@@ -568,7 +571,8 @@ class LinearPoolNewsvendorLayer(nn.Module):
         self.risk_aversion = risk_aversion
         self.gamma = gamma
         # self.apply_softmax = apply_softmax
-        self.projection_simplex = projection_simplex
+        # self.projection_simplex = projection_simplex
+        self.feasibility_method = feasibility_method
         self.regularizer = regularizer
         self.crit_fract = critic_fract
         self.problem = problem
@@ -630,6 +634,12 @@ class LinearPoolNewsvendorLayer(nn.Module):
                                                variables = [z, pwl_loss, error] )
 
 
+    def get_weights(self):
+        if self.feasibility_method == 'softmax':
+            return to_np(torch.nn.functional.softmax(self.weights))
+        else:
+            return to_np(self.weights)
+        
     def forward(self, list_inputs):
         """
         Forward pass of the newvendor layer.
@@ -647,9 +657,12 @@ class LinearPoolNewsvendorLayer(nn.Module):
         #     weights = torch.nn.functional.softmax(self.weights, dim = 0)
         # else:
         #     weights = self.weights
-
-        # Apply the weights element-wise to each input tensor
-        weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+        if self.feasibility_method == 'softmax':
+            softmax_weights = torch.nn.functional.softmax(self.weights, dim = 0)                    
+            weighted_inputs = [softmax_weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+        else:
+            # Apply the weights element-wise to each input tensor
+            weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
 
         # Perform the convex combination across input vectors
         combined_pdf = sum(weighted_inputs)
@@ -788,8 +801,8 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 
                 # print('before projection')
                 # print(self.weights)
-                
-                if self.projection_simplex == True:
+                # if self.projection_simplex == True:                
+                if self.feasibility_method == 'projection':
                     w_proj = self.simplex_projection(self.weights.clone())
                     with torch.no_grad():
                         self.weights.copy_(torch.FloatTensor(w_proj))
@@ -1461,7 +1474,7 @@ class LinearPoolSchedLayer(nn.Module):
     #     return average_loss
     
 class LinearPoolCRPSLayer(nn.Module):        
-    def __init__(self, num_inputs, support, projection_simplex = True):
+    def __init__(self, num_inputs, support, feasibility_method = 'projection'):
         super(LinearPoolCRPSLayer, self).__init__()
 
         # Initialize learnable weight parameters
@@ -1469,7 +1482,7 @@ class LinearPoolCRPSLayer(nn.Module):
         self.weights = nn.Parameter(torch.FloatTensor((1/num_inputs)*np.ones(num_inputs)).requires_grad_())
         self.num_inputs = num_inputs
         self.support = support
-        self.projection_simplex = projection_simplex
+        self.feasibility_method = feasibility_method
     
     def simplex_projection(self, w_init):
         """
@@ -1485,6 +1498,12 @@ class LinearPoolCRPSLayer(nn.Module):
         w_proj = torch.maximum(w_init + dual_mu, torch.zeros_like(w_init))
         return w_proj
     
+    def get_weights(self):
+        if self.feasibility_method == 'softmax':
+            return to_np(torch.nn.functional.softmax(self.weights))
+        else:
+            return to_np(self.weights)
+        
     def forward(self, list_inputs):
         """
         Forward pass of the linear pool minimizing CRPS.
@@ -1497,7 +1516,13 @@ class LinearPoolCRPSLayer(nn.Module):
         """
         
         # Apply the weights element-wise to each input tensor !!!! CDFs
-        weighted_inputs = [self.weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
+        if self.feasibility_method == 'softmax':
+            softmax_weights = torch.nn.functional.softmax(self.weights, dim = 0)
+            weighted_inputs = [softmax_weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
+        else:
+            weighted_inputs = [self.weights[i] * input_tensor.cumsum(1) for i, input_tensor in enumerate(list_inputs)]
+
+        #     weights = torch.nn.functional.softmax(self.weights, dim = 0)
 
         # Perform the convex combination across input vectors
         combined_CDF = sum(weighted_inputs)
@@ -1586,7 +1611,7 @@ class LinearPoolCRPSLayer(nn.Module):
                 loss.backward()
                 opt.step()
                 
-                if self.projection_simplex == True:
+                if self.feasibility_method == 'projection':
                     w_proj = self.simplex_projection(self.weights.clone())
                     with torch.no_grad():
                         self.weights.copy_(torch.FloatTensor(w_proj))

@@ -466,14 +466,14 @@ def tree_params():
     params['max_features'] = 1
     return params
 
-def nn_params():
-    'NN hyperparameters'
+def gd_params():
+    'Gradient-descent hyperparameters'
     nn_params = {}
     nn_params['patience'] = 10
     nn_params['batch_size'] = 512  
     nn_params['num_epochs'] = 500
     nn_params['learning_rate'] = 1e-2
-    nn_params['apply_softmax'] = True
+    nn_params['feasibility_method'] = 'softmax'
     return nn_params
 
 def params():
@@ -489,15 +489,15 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2] # select solar plant from GEFCom2014 data set
+    params['target_zone'] = [3] # select solar plant from GEFCom2014 data set
     
     # Problem parameters        
-    params['crit_quant'] = np.arange(0.2, 1, 0.1).round(2)
+    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
     params['risk_aversion'] = [0.2]
 
     params['save'] = True # If True, then saves models and results
     params['train_static'] = True
-    params['train_adaptive'] = True
+    params['train_adaptive'] = False
     
     return params
 
@@ -505,9 +505,9 @@ def params():
     
 config = params()
 hyperparam = tree_params()
-nn_hparam = nn_params()
+gd_hparam = gd_params()
 
-results_path = f'{cd}\\results\\solar_trading_results'
+results_path = f'{cd}\\results\\solar_trading_results_' + gd_hparam['feasibility_method']
 data_path = f'{cd}\\data'
 
 aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
@@ -601,11 +601,11 @@ n_test_obs = len(testY)
 
 #%%
 ### Gradient algorithm and NN-model hyperparameters
-patience = nn_hparam['patience']
-batch_size = nn_hparam['batch_size']
-num_epochs = nn_hparam['num_epochs']
-learning_rate = nn_hparam['learning_rate']
-apply_softmax = nn_hparam['apply_softmax']
+patience = gd_hparam['patience']
+batch_size = gd_hparam['batch_size']
+num_epochs = gd_hparam['num_epochs']
+learning_rate = gd_hparam['learning_rate']
+# apply_softmax = nn_hparam['apply_softmax']
 row_counter = 0
 
 try:
@@ -616,34 +616,6 @@ except:
     Decision_cost = pd.DataFrame()
     QS_df = pd.DataFrame()
     mean_QS = pd.DataFrame()
-
-#%% Projection test
-
-# w = torch.FloatTensor([-2, 0.4, 0.5])
-
-# u_sorted, indices = torch.sort(w, descending = True)
-# j_ind = torch.arange(1, w.shape[0] + 1)
-# rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
-# dual_mu = 1/rho*(1-u_sorted[:rho].sum())
-
-# y_proj = torch.maximum(w + dual_mu, torch.zeros_like(w))
-
-# m = gp.Model()            
-# m.setParam('OutputFlag', 0)
-
-# # variables
-# w_proj = m.addMVar(w.shape[0], vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-# # constraints
-# m.addConstr(w_proj.sum() == 1)
-# m.setObjective( (w_proj - w.detach().numpy())@(w_proj - w.detach().numpy()), gp.GRB.MINIMIZE)
-
-# m.optimize()
-
-# print(f'Original:{w}')
-# print(f'Closed-form:{y_proj}')
-# print(f'Gurobi{w_proj.X}')
-
 #%%
 # Iterate over combinations of problem parameters (for a single power plant)
 for tup in tuple_list[row_counter:]:
@@ -892,8 +864,9 @@ for tup in tuple_list[row_counter:]:
     
     if row_counter == 0:
         #### CRPS minimization using gradient-based approach
-        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
-        optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = 1e-2)
+        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
+                                               feasibility_method = gd_hparam['feasibility_method'])
+        optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = 1e-2)
         lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25)
         
         #%
@@ -901,7 +874,7 @@ for tup in tuple_list[row_counter:]:
         # lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp)
 
     #%
-    lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
+    lambda_static_dict['CRPS'] = lpool_crps_model.get_weights()
 
     #%
     ##### Decision-focused learning combination for different values of gamma  
@@ -919,7 +892,7 @@ for tup in tuple_list[row_counter:]:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                     gamma = gamma, problem = target_problem, critic_fract = critical_fractile, risk_aversion = risk_aversion, 
-                                                    projection_simplex = True)
+                                                    feasibility_method = gd_hparam['feasibility_method'])
         
         optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = 1e-2)
         
@@ -927,7 +900,7 @@ for tup in tuple_list[row_counter:]:
                                           patience = patience, validation = False, relative_tolerance = 1e-5)
 
         
-        lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.weights.detach().numpy()
+        lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.get_weights()
 
         print('Weights')
         print(lambda_static_dict[f'DF_{gamma}'])
@@ -967,6 +940,7 @@ for tup in tuple_list[row_counter:]:
     num_epochs = 500
     #%
     ####### Train Conditional/Adaptive Combination models
+
     if config['train_adaptive'] == True:
         ### CRPS Learning - Linear Regression
         torch.manual_seed(0)
@@ -1053,7 +1027,10 @@ for tup in tuple_list[row_counter:]:
         if config['save']:
             with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'wb') as handle:
                 pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
+    else:
+        with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'rb') as handle:
+            adaptive_models_dict = pickle.load(handle)
+            
     #% Performance evaluation
 
     static_models = list(lambda_static_dict) 

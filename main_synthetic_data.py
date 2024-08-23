@@ -671,13 +671,13 @@ learning_rate = 1e-2
 num_epochs = 100
 patience = 10
 
-train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
+train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
 
 #### CRPS Learning, gradient-based approach with torch layer
-lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp))
+lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), feasibility_method = 'softmax')
 optimizer = torch.optim.SGD(lpool_crps_model.parameters(), lr = 1e-2)
 lpool_crps_model.train_model(train_data_loader, train_data_loader, optimizer, epochs = 500, patience = 25)
-lambda_crps = lpool_crps_model.weights.detach().numpy()
+lambda_crps = lpool_crps_model.get_weights()
 
 print(f'CRPSL weights:{lambda_crps}')
 
@@ -695,14 +695,14 @@ learning_rate = 1e-2
 num_epochs = 100
 patience = 5
 
-train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
+train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
 
 # iterate over values of gamma (CRPS regularization)
 for gamma in [0, 0.1, 1]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
                                                 gamma = gamma, problem = 'reg_trad', critic_fract = critical_fractile, risk_aversion = regularization,
-                                                projection_simplex = True)
+                                                feasibility_method = 'softmax')
     
     optimizer = torch.optim.Adam(lpool_newsv_model.parameters(), lr = 1e-2)
     
@@ -710,7 +710,7 @@ for gamma in [0, 0.1, 1]:
                                       patience = patience, validation = False, relative_tolerance = 1e-5)
 
     
-    lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.weights.detach().numpy()
+    lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.get_weights()
 
     print('Weights')
     print(lambda_static_dict[f'DF_{gamma}'])
@@ -806,10 +806,10 @@ print(temp_mean_QS[all_models].mean().round(4))
 if config['save']:
     #Prescriptions.to_csv(f'{results_path}\\{target_problem}_{critical_fractile}_{target_zone}_Prescriptions.csv')
     lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
-    lamda_static_df.to_csv(f'{results_path}\\lambda_static.csv')
+    lamda_static_df.to_csv(f'{results_path}\\lambda_static_softmax.csv')
     
-    temp_Decision_cost.to_csv(f'{results_path}\\synthetic_Decision_cost.csv')
-    temp_mean_QS.to_csv(f'{results_path}\\synthetic_QS_mean.csv')
+    temp_Decision_cost.to_csv(f'{results_path}\\synthetic_Decision_cost_softmax.csv')
+    temp_mean_QS.to_csv(f'{results_path}\\synthetic_QS_mean_softmax.csv')
     
     
     
