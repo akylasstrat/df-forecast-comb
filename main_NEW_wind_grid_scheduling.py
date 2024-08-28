@@ -217,9 +217,10 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     # Add generator constraints, DA & RT
     rt_sched.addConstr( p_DA + r_up <= grid['Pmax'].reshape(-1))    
     rt_sched.addConstr( r_down <= p_DA)    
-
-    # rt_sched.addConstr( r_up <= grid['R_u_max'].reshape(-1))
-    # rt_sched.addConstr( r_down <= grid['R_d_max'].reshape(-1))
+    
+    # Ramping constraints
+    rt_sched.addConstr( r_up <= grid['R_u_max'].reshape(-1))
+    rt_sched.addConstr( r_down <= grid['R_d_max'].reshape(-1))
 
     rt_sched.addConstr( G_shed <= grid['Pmax'].reshape(-1))
     rt_sched.addConstr( L_shed <= grid['Pd'].reshape(-1))
@@ -296,8 +297,8 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     stoch_market.addConstrs( p_DA + r_up[:,s] <= grid['Pmax'].reshape(-1) for s in range(n_scen))
     stoch_market.addConstrs( r_down[:,s] <= p_DA for s in range(n_scen))
     
-    # stoch_market.addConstr( r_up <= np.tile(grid['R_u_max'].reshape(-1,1), n_scen))
-    # stoch_market.addConstr( r_down <= np.tile(grid['R_d_max'].reshape(-1,1), n_scen))
+    stoch_market.addConstr( r_up <= np.tile(grid['R_u_max'].reshape(-1,1), n_scen))
+    stoch_market.addConstr( r_down <= np.tile(grid['R_d_max'].reshape(-1,1), n_scen))
     
     # Slacks for real-time
     stoch_market.addConstr( G_shed <= np.tile(grid['Pmax'].reshape(-1,1), n_scen))
@@ -448,15 +449,15 @@ def load_grid_data(case_name, pglib_path):
     grid['R_d_max'] = R_d_max
     return grid
 
-def nn_params():
-    'NN hyperparameters'
-    nn_params = {}
-    nn_params['patience'] = 10
-    nn_params['batch_size'] = 100  
-    nn_params['num_epochs'] = 1500
-    nn_params['learning_rate'] = 1e-2
-    nn_params['apply_softmax'] = True
-    return nn_params
+def gd_params():
+    'Gradient-descent hyperparameters'
+    gd_params = {}
+    gd_params['patience'] = 10
+    gd_params['batch_size'] = 512  
+    gd_params['num_epochs'] = 500
+    gd_params['learning_rate'] = 1e-2
+    gd_params['feasibility_method'] = 'softmax'
+    return gd_params
 
 def params():
     ''' Set up the experiment parameters'''
@@ -478,7 +479,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.001, 0.01]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 1
+    params['target_ieee_case'] = 0
     
     params['train_static'] = True
     
@@ -488,10 +489,10 @@ def params():
 #%%
 config = params()
 hyperparam = tree_params()
-nn_hparam = nn_params()
+nn_hparam = gd_params()
 
 # results_path = f'{cd}\\results\\grid_scheduling'
-results_path = f'{cd}\\results\\grid_scheduling_noramp'
+results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
 pglib_path =  'C:/Users/akyla/pglib-opf/'
 
@@ -656,7 +657,7 @@ patience = nn_hparam['patience']
 batch_size = nn_hparam['batch_size']
 num_epochs = nn_hparam['num_epochs']
 learning_rate = nn_hparam['learning_rate']
-apply_softmax = nn_hparam['apply_softmax']
+# apply_softmax = nn_hparam['apply_softmax']
 row_counter = 0
 
 RT_cost = pd.DataFrame()
@@ -863,14 +864,15 @@ for tup in tuple_list[row_counter:]:
     
     if row_counter == 0:
         #### CRPS minimization/ with torch layer
-        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
-                                               projection_simplex = True)
+        lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
+                                               feasibility_method = nn_hparam['feasibility_method'])
         optimizer = torch.optim.Adam(lpool_crps_model.parameters(), lr = learning_rate)
         lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25, 
                                      validation = False)
 
         #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)  
-    lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
+    lambda_static_dict['CRPS'] = lpool_crps_model.get_weights()
+    # lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
     print(lambda_static_dict['CRPS'])
     
     #%%
@@ -887,13 +889,13 @@ for tup in tuple_list[row_counter:]:
     for gamma in config['gamma_list']:
         
         lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, clearing_type = 'stoch', projection_simplex = True)
+                                                 grid = grid, gamma = gamma, clearing_type = 'stoch', feasibility_method = 'softmax')
         
         optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
         
         lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
                                           patience = patience, validation = False, relative_tolerance = 1e-5)
-        lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.weights.detach().numpy()
+        lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
                 
         if config['save']:
             lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)

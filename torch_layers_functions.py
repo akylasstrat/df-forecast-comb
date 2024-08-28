@@ -966,7 +966,7 @@ class LinearPool_VFA_Layer(nn.Module):
     
 class LinearPoolSchedLayer(nn.Module):        
     def __init__(self, num_inputs, support, grid, 
-                 gamma, regularization = 0, projection_simplex = True, apply_softmax = False, initial_weights = None, clearing_type = 'det', include_network = False, 
+                 gamma, regularization = 0, feasibility_method = 'projection', initial_weights = None, clearing_type = 'det', include_network = False, 
                  add_network = False):
         super(LinearPoolSchedLayer, self).__init__()
 
@@ -986,10 +986,11 @@ class LinearPoolSchedLayer(nn.Module):
         self.include_network = include_network
         self.Pmax_tensor = torch.FloatTensor(self.grid['Pmax'].reshape(-1))
         self.Pmin_tensor = torch.FloatTensor(self.grid['Pmin'].reshape(-1))
-        self.projection_simplex = projection_simplex 
+        # self.projection_simplex = projection_simplex 
         #self.risk_aversion = risk_aversion
         self.gamma = gamma
-        self.apply_softmax = apply_softmax
+        self.feasibility_method = feasibility_method
+        # self.apply_softmax = apply_softmax
         self.add_network = add_network
         
         n_locations = len(self.support)
@@ -1041,7 +1042,7 @@ class LinearPoolSchedLayer(nn.Module):
                 #RT_constraints += [cost_RT[s] ==  (grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s]]
                                            
             # + 0.01*(cp.norm(r_up[:,s] + r_down[:,s]))
-            RT_cost_expr = cp.sum([ prob_weights[s]*((grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] )  for s in range(n_locations)])
+            RT_cost_expr = cp.sum([ prob_weights[s]*((grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] + 0.01*(cp.norm(r_up[:,s] + r_down[:,s])) )  for s in range(n_locations)])
             objective_funct = cp.Minimize( cost_DA +  RT_cost_expr) 
             #l2_regularization = (prob_weights@sq_error)
             
@@ -1100,7 +1101,7 @@ class LinearPoolSchedLayer(nn.Module):
         RT_sched_constraints += [r_down <= p_gen]            
         
         # Ramping constraints
-        # RT_sched_constraints += [r_up <= grid['R_u_max'].reshape(-1), r_down <= grid['R_d_max'].reshape(-1)]            
+        RT_sched_constraints += [r_up <= grid['R_u_max'].reshape(-1), r_down <= grid['R_d_max'].reshape(-1)]            
             
         
         # m.addConstrs(node_inj[:,i] == (grid['node_G']@p_G_i[:,i] + grid['node_L']@slack_i[:,i] -grid['node_L']@curt_i[:,i] 
@@ -1119,6 +1120,12 @@ class LinearPoolSchedLayer(nn.Module):
         self.rt_layer = CvxpyLayer(rt_problem, parameters=[p_gen, w_actual],
                                            variables = [r_up, r_down, g_shed, l_shed, cost_RT] )
 
+    def get_weights(self):
+        if self.feasibility_method == 'softmax':
+            return to_np(torch.nn.functional.softmax(self.weights))
+        else:
+            return to_np(self.weights)
+        
     def simplex_projection(self, w_init):
         """
         Projection to unit simplex, closed-form solution
@@ -1144,8 +1151,15 @@ class LinearPoolSchedLayer(nn.Module):
             torch.Tensor: The convex combination of input tensors/ combination of PDFs.
         """
 
-        # Apply the weights element-wise to each input tensor
-        weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+        if self.feasibility_method == 'softmax':
+            softmax_weights = torch.nn.functional.softmax(self.weights, dim = 0)                    
+            weighted_inputs = [softmax_weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+        else:
+            # Apply the weights element-wise to each input tensor
+            weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
+
+        # # Apply the weights element-wise to each input tensor
+        # weighted_inputs = [self.weights[i] * input_tensor for i, input_tensor in enumerate(list_inputs)]
 
         # Perform the convex combination across input vectors
         combined_pdf = sum(weighted_inputs)
@@ -1258,18 +1272,36 @@ class LinearPoolSchedLayer(nn.Module):
             
             
             loss = torch.mean(loss_i)
-
+            
             if opt:
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-                                
-                if self.projection_simplex == True:
+                
+                # print('before projection')
+                # print(self.weights)
+                # if self.projection_simplex == True:                
+                if self.feasibility_method == 'projection':
                     w_proj = self.simplex_projection(self.weights.clone())
                     with torch.no_grad():
                         self.weights.copy_(torch.FloatTensor(w_proj))
                     
+                    # print('after projection')
+                    # print(self.weights)
+
             total_loss += loss.item() * y_batch.shape[0]
+
+            # if opt:
+            #     opt.zero_grad()
+            #     loss.backward()
+            #     opt.step()
+                                
+            #     if self.projection_simplex == True:
+            #         w_proj = self.simplex_projection(self.weights.clone())
+            #         with torch.no_grad():
+            #             self.weights.copy_(torch.FloatTensor(w_proj))
+                    
+            # total_loss += loss.item() * y_batch.shape[0]
             
         return total_loss / len(data_loader.dataset)
     
