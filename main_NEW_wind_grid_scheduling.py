@@ -477,7 +477,7 @@ def params():
     params['risk_aversion'] = [0.2] # {mse, newsvendor, cvar, reg_trad, pwl}
 
     params['dataset'] = 'wind' # !!! Do not change
-    params['gamma_list'] = [0, 0.001, 0.01]
+    params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2] # !!! Do not change
     params['target_ieee_case'] = 0
     
@@ -494,7 +494,7 @@ nn_hparam = gd_params()
 # results_path = f'{cd}\\results\\grid_scheduling'
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
@@ -843,7 +843,7 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['Ave'] = (1/N_experts)*np.ones(N_experts)
                 
     #### Inverse Performance-based weights (invW in the paper)
-    for g in (config['gamma_list'] + ['inf']):
+    for g in ([0, 0.1, 1] + ['inf']):
         lambda_tuned_inv, _ = insample_weight_tuning(grid, train_targetY, trainZopt, train_p_list, regularization_gamma=g, problem = target_problem, 
                                                      support = y_supp)
         
@@ -880,34 +880,40 @@ for tup in tuple_list[row_counter:]:
     from torch_layers_functions import * 
     patience = 5
     
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
-    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = batch_size, shuffle = False)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size, shuffle = False)
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 100, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 100, shuffle = False)
     
     #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]    
     config['gamma_list'] = [0, 0.1, 1]
-    for gamma in config['gamma_list']:
+    if config['train_static']:
         
-        lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
-                                                 grid = grid, gamma = gamma, clearing_type = 'stoch', feasibility_method = 'softmax')
+        for gamma in config['gamma_list']:
+            
+            lpool_sched_model = LinearPoolSchedLayer(num_inputs = N_experts, support = torch.FloatTensor(y_supp), 
+                                                     grid = grid, gamma = gamma, clearing_type = 'stoch', feasibility_method = 'softmax')
+            
+            optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
+            
+            lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
+                                              patience = patience, validation = False, relative_tolerance = 1e-5)
+            lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
+                    
+            if config['save']:
+                lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
+                lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
         
-        optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
+                with open(f'{results_path}\\{filename_prefix}_lambda_static_dict.pickle', 'wb') as handle:
+                    pickle.dump(lambda_static_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        with open(f'{results_path}\\{filename_prefix}_lambda_static_dict.pickle', 'rb') as handle:
+            lambda_static_dict = pickle.load(handle)
         
-        lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
-                                          patience = patience, validation = False, relative_tolerance = 1e-5)
-        lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
-                
-        if config['save']:
-            lamda_static_df = pd.DataFrame.from_dict(lambda_static_dict)
-            lamda_static_df.to_csv(f'{results_path}\\{filename_prefix}_lambda_static.csv')
-    
-            with open(f'{results_path}\\{filename_prefix}_lambda_static_dict.pickle', 'wb') as handle:
-                pickle.dump(lambda_static_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
     plt.show()
+    
     # Evaluate performance on test set
     
     static_models = list(lambda_static_dict) 

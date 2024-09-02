@@ -1031,16 +1031,26 @@ class LinearPoolSchedLayer(nn.Module):
                 # Upper bounds
 
                 RT_constraints += [r_up[:,s] + p_DA <= grid['Pmax'].reshape(-1)]            
-                RT_constraints += [r_down[:,s] <= p_DA]            
-
-                # Ramping limits
-                # RT_constraints += [r_up[:,s] <= grid['R_u_max'].reshape(-1), r_down[:,s] <= grid['R_d_max'].reshape(-1)]            
-                #RT_constraints += [g_shed[:,s] <= p_DA]            
+                RT_constraints += [r_down[:,s] <= p_DA]                            
+                # RT_constraints += [g_shed[:,s] <= p_DA]            
                 # balancing
                 RT_constraints += [p_DA.sum() + r_up[:,s].sum() - r_down[:,s] + grid['w_capacity']*self.support[s]  >= grid['Pd'].sum()]
                 
                 #RT_constraints += [cost_RT[s] ==  (grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s]]
-                                           
+
+                ### Ramping limits
+                # Upper bounds
+                RT_constraints += [r_up[:,s] <= grid['R_u_max'].reshape(-1)]            
+                RT_constraints += [r_down[:,s] <= grid['R_d_max'].reshape(-1)]            
+            
+            ### Ramping limits
+            # for g in range(grid['n_unit']):            
+            #     if grid['Pmax'][g] > grid['R_u_max'][g]:                
+            #         RT_constraints += [r_up[g,:] <= grid['R_u_max'][g].reshape(-1)]                                
+            #     if grid['Pmax'][g] > grid['R_d_max'][g]:                
+            #         RT_constraints += [r_down[g,:] <= grid['R_d_max'][g].reshape(-1)]            
+                
+
             # + 0.01*(cp.norm(r_up[:,s] + r_down[:,s]))
             RT_cost_expr = cp.sum([ prob_weights[s]*((grid['C_up'])@r_up[:,s] + (- grid['C_down'])@r_down[:,s] + 0.01*(cp.norm(r_up[:,s] + r_down[:,s])) )  for s in range(n_locations)])
             objective_funct = cp.Minimize( cost_DA +  RT_cost_expr) 
@@ -1100,8 +1110,15 @@ class LinearPoolSchedLayer(nn.Module):
         RT_sched_constraints += [r_up <= grid['Pmax'].reshape(-1) - p_gen]            
         RT_sched_constraints += [r_down <= p_gen]            
         
+        # # Ramping constraints
+        # RT_sched_constraints += [r_up <= grid['R_u_max'].reshape(-1), r_down <= grid['R_d_max'].reshape(-1)]            
+
         # Ramping constraints
-        RT_sched_constraints += [r_up <= grid['R_u_max'].reshape(-1), r_down <= grid['R_d_max'].reshape(-1)]            
+        # for g in range(grid['n_unit']):            
+        #     if grid['Pmax'][g] > grid['R_u_max'][g]:                
+        #         RT_sched_constraints += [r_up[g] <= grid['R_u_max'][g].reshape(-1)]                                
+        #     if grid['Pmax'][g] > grid['R_d_max'][g]:                
+        #         RT_sched_constraints += [r_down[g] <= grid['R_d_max'][g].reshape(-1)]            
             
         
         # m.addConstrs(node_inj[:,i] == (grid['node_G']@p_G_i[:,i] + grid['node_L']@slack_i[:,i] -grid['node_L']@curt_i[:,i] 
@@ -1110,7 +1127,7 @@ class LinearPoolSchedLayer(nn.Module):
         # m.addConstrs(PTDF@node_inj[:,i] >= -grid['Line_Capacity'].reshape(-1) for i in range(n_samples))
         
         # balancing
-        RT_sched_constraints += [p_gen.sum() + r_up.sum() - r_down.sum() -g_shed.sum() + grid['w_capacity']*w_actual + l_shed.sum() == grid['Pd'].sum()]
+        RT_sched_constraints += [p_gen.sum() + r_up.sum() - r_down.sum() -g_shed.sum() + grid['w_capacity']*w_actual + l_shed.sum() >= grid['Pd'].sum()]
         RT_sched_constraints += [cost_RT == (grid['C_up']- grid['Cost'])@r_up + (grid['Cost'] - grid['C_down'])@r_down\
                                  +grid['VOLL']*(g_shed.sum() + l_shed.sum()) ]
             
@@ -1165,8 +1182,9 @@ class LinearPoolSchedLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':20_000})
-
+        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':10_000, "solve_method": "ECOS"})
+        # SCS convergence issues: use the following the set up
+        # solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0}
         return combined_pdf, cvxpy_output
     
     
@@ -1250,8 +1268,12 @@ class LinearPoolSchedLayer(nn.Module):
             p_hat_proj = torch.maximum(torch.minimum(p_hat, self.Pmax_tensor), self.Pmin_tensor)
 
             # solve RT layer, find redispatch cost                
-            rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), solver_args={'max_iters':50_000})   
-            
+            rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), 
+                                      solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})   
+
+            # solver_args={'max_iters':50_000, "solve_method": "ECOS"}            
+            # solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0}
+
             # scale costs to EUR/MWh
             scale_factor_DA_i = p_hat_proj.detach().numpy().sum(1).reshape(-1,1)
             scale_factor_RT_i = rt_output[0].detach().numpy().sum(1).reshape(-1,1) + + rt_output[1].detach().numpy().sum(1).reshape(-1,1)

@@ -38,7 +38,13 @@ def params():
 config = params()
 zone = 'Z2' # do not change this
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m']
-case = Cases[1]
+case = Cases[0]
+label_dict = {'Ave':'$\mathtt{OLP}$', 'CRPS':'$\mathtt{CRPSL}$', 
+              'knn':'$\mathtt{kNN}$', 'cart':'$\mathtt{CART}$', 'rf':'$\mathtt{RF}$', 
+              'invW-0':'$\mathtt{invW-0}$','invW-0.1':'$\mathtt{invW-0.1}$', 
+              'invW-1':'$\mathtt{invW-1}$', 'invW-0.001':'$\mathtt{invW-0.001}$',
+              'invW-inf':'$\mathtt{invW-\infty}$',
+              'DF_0':'$\mathtt{DFL}$-0', 'DF_0.1':'$\mathtt{DFL}$-0.1', 'DF_1':'$\mathtt{DFL}$-1'}
 
 results_path = f'{cd}\\results\\grid_scheduling'
 
@@ -52,10 +58,11 @@ total_regret = da_cost + rt_cost - da_cost['Perfect'].values[0]
 print(total_regret.mean().round(3))
 print(crps.mean().round(3))
 
+models_to_plot = ['Ave', 'invW-0', 'invW-inf', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']
 fig, ax  = plt.subplots()
-lambda_static[['Ave', 'Insample', 'CRPS', 'DF_0.001', 'DF_0.01']].plot(kind='bar', ax = ax)
+lambda_static[models_to_plot].plot(kind='bar', ax = ax)
 plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
-plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0.001', '$\mathtt{DFL}$-0.01'], ncol = 2)
+plt.legend([label_dict[key] for key in models_to_plot], ncol = 2)
 plt.xlabel('Component forecasts')
 plt.ylabel('Combination weights $\mathtt{\lambda}$')
 #plt.savefig(f'{cd}\\plots\\lambda_barplot_wind_grid_sched.pdf')
@@ -67,7 +74,7 @@ config = params()
 config['save'] = False
 target_prob = 'reg_trad'
 #crit_fract = 0.9
-results_folder = 'solar_trading_results_projection'
+results_folder = 'solar_trading_results_softmax'
 
 decision_cost = []
 qs_cost = []
@@ -81,27 +88,27 @@ decision_cost.reset_index(inplace = True)
 qs_cost = pd.concat(qs_cost)
 qs_cost.reset_index(inplace = True)
 #%%
-target = 'Z3'
+# target = 'Z3'
 
-cost_df = pd.read_csv(f'{cd}\\results\\solar_trading_results_projection\\{target}_{target_prob}__Decision_cost.csv', index_col = 0)
-crps_df = pd.read_csv(f'{cd}\\results\\solar_trading_results_projection\\{target}_{target_prob}__mean_QS.csv', index_col = 0)
+# cost_df = pd.read_csv(f'{cd}\\results\\solar_trading_results_projection\\{target}_{target_prob}__Decision_cost.csv', index_col = 0)
+# crps_df = pd.read_csv(f'{cd}\\results\\solar_trading_results_projection\\{target}_{target_prob}__mean_QS.csv', index_col = 0)
 
-cost_softmax = pd.read_csv(f'{cd}\\results\\solar_trading_results_softmax\\{target}_{target_prob}__Decision_cost.csv', index_col = 0)
-crps_softmax = pd.read_csv(f'{cd}\\results\\solar_trading_results_softmax\\{target}_{target_prob}__mean_QS.csv', index_col = 0)
+# cost_softmax = pd.read_csv(f'{cd}\\results\\solar_trading_results_softmax\\{target}_{target_prob}__Decision_cost.csv', index_col = 0)
+# crps_softmax = pd.read_csv(f'{cd}\\results\\solar_trading_results_softmax\\{target}_{target_prob}__mean_QS.csv', index_col = 0)
 
-for s in ['CRPS', 'DF_0', 'DF_0.1', 'DF_1']:
-    cost_df[f'{s}_softmax'] = cost_softmax[s]
-    crps_df[f'{s}_softmax'] = crps_softmax[s]
+# for s in ['CRPS', 'DF_0', 'DF_0.1', 'DF_1']:
+#     cost_df[f'{s}_softmax'] = cost_softmax[s]
+#     crps_df[f'{s}_softmax'] = crps_softmax[s]
 
 #%% Plot lambdas for specific combination
 
 lambda_static = pd.read_csv(f'{cd}\\results\\{results_folder}\\Z2_reg_trad__0.2_lambda_static.csv', index_col = 0)
 
+models_to_plot = ['Ave', 'invW-0', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']
 fig, ax  = plt.subplots()
-lambda_static[['Ave', 'invW-0', 'CRPS', 'DF_0', 'DF_0.1', 'DF_1']].plot(kind='bar', ax = ax)
+lambda_static[models_to_plot].plot(kind='bar', ax = ax)
 plt.xticks([0,1,2], ['$\mathtt{kNN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'], rotation = 0)
-plt.legend(['$\mathtt{OLP}$', '$\mathtt{invW}$', '$\mathtt{CRPSL}$', '$\mathtt{DFL}$-0', '$\mathtt{DFL}$-0.1', 
-            '$\mathtt{DFL}$-1'], ncol = 2)
+plt.legend([label_dict[key] for key in models_to_plot], ncol = 2)
 plt.xlabel('Component forecasts')
 plt.ylabel('Combination weights $\mathtt{\lambda}$')
 if config['save']:  plt.savefig(f'{cd}\\plots\\lambda_barplot_trading.pdf')
@@ -180,7 +187,7 @@ mlp_labels = ['$\mathtt{CRPSL-MLP}$'] + ['$\mathtt{DFL-MLP}-$0', '$\mathtt{DFL-M
 
 fig, ax  = plt.subplots()
 
-plt.xlabel('Cost improvement over $\mathtt{OLP}$ (%)')
+plt.xlabel('Regret improvement over $\mathtt{OLP}$ (%)')
 plt.ylabel('CRPS improvement over $\mathtt{OLP}$ (%)')
 
 for i,m in enumerate(lr_models_plot):
@@ -201,5 +208,5 @@ ax2.get_yaxis().set_visible(False)
 lgd1 = ax.legend(loc=(0.01, 0.6))
 lgd2 = ax2.legend(loc=(0.25, 0.75))
 ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-if config['save']:  plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
+if config['save']:  plt.savefig(f'{cd}//plots//adaptive_reg_trad_cost_CRPS_tradeoff_softmax.pdf', bbox_extra_artists=(lgd1,lgd2), bbox_inches='tight')
 plt.show()
