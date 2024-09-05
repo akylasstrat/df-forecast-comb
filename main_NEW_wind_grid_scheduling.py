@@ -895,8 +895,9 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
             
-            lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
+            lpool_sched_model.train_model(valid_data_loader, valid_data_loader, optimizer, epochs = 50, 
                                               patience = patience, validation = False, relative_tolerance = 1e-5)
+            print(f'Learned weights:{lpool_sched_model.get_weights()}')
             lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
                     
             if config['save']:
