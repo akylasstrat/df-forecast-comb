@@ -1168,7 +1168,7 @@ class LinearPoolSchedLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
         
         # Pass the combined output to the CVXPY layer
-        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':100_000, "solve_method": "ECOS"})
+        cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':500_000, "solve_method": "ECOS"})
         
         # solver_args={'max_iters':50_000, "solve_method": "ECOS"}
         # solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0}
@@ -1201,9 +1201,13 @@ class LinearPoolSchedLayer(nn.Module):
             # solve RT layer, find redispatch cost    
 
             start_time = time.time()
-            rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), 
-                                      solver_args={'max_iters':50_000, "solve_method": "ECOS"})
-            
+            try:
+                rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), 
+                                          solver_args={'max_iters':10_000, "solve_method": "ECOS"})
+            except:
+                rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), 
+                                          solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
+                
             if i == 0: 
                 print(f'Forward pass, RT market:{time.time() - start_time}')
             

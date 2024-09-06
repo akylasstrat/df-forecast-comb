@@ -479,7 +479,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 2
+    params['target_ieee_case'] = 1
     
     params['train_static'] = True
     
@@ -562,92 +562,18 @@ if dataset == 'wind':
 
     expert_zones = ['Z2', 'Z3', 'Z4']
     
-    trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
-    comb_trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
-    testX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
+    trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+    comb_trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+    testX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
     
-    trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad']][config['start_date']:config['split_date_prob']]
-    comb_trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad']][config['split_date_prob']:config['split_date_comb']]
-    testX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad']][config['split_date_comb']:]
+    trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+    comb_trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+    testX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
     
     trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
     comb_trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
     testX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
     
-        
-elif dataset == 'solar':
-    # ** This runs the grid scheduling problem using solar instead of wind (not included in the paper) **
-    aggr_df = pd.read_csv(f'{data_path}\\gefcom2014-solar.csv', index_col = 0, parse_dates=True)
-
-    config['start_date'] = '2012-01-01'
-    config['split_date_prob'] = '2013-01-01' # Defines train/test split
-    config['split_date_comb'] = '2014-01-01' # Defines train/test split
-    config['end_date'] = '2014-07-01'
-
-    zone_target = config['target_zone']
-    aggr_df = aggr_df.query(f'ZONEID=={zone_target}')
-    target_problem = config['problem']
-    risk_aversion = config['risk_aversion']
-
-    filename_prefix = f'Z{zone_target[0]}_{target_case}_'
-            
-    del aggr_df['ZONEID']
-
-    weather_dict = {'VAR78':'tclw', 'VAR79': 'tciw', 'VAR134':'SP', 'VAR157':'rh', 
-                    'VAR164':'tcc', 'VAR165':'10u', 'VAR166':'10v', 'VAR167':'2T', 
-                    'VAR169':'SSRD', 'VAR175':'STRD', 'VAR178':'TSR', 'VAR228':'TP'}
-
-    aggr_df = aggr_df.rename(columns = weather_dict)
-
-    for col in ['SSRD', 'STRD', 'TSR', 'TP']:
-        if col != 'TP':
-            aggr_df[col] = aggr_df[col].diff()/3600
-            aggr_df[col][aggr_df[col]<0] = np.nan
-        else:
-            aggr_df[col] = aggr_df[col].diff()
-            aggr_df[col][aggr_df[col]<0] = np.nan
-            
-    aggr_df = aggr_df.interpolate()
-    aggr_df = aggr_df.dropna()
-
-    aggr_df['Hour'] = aggr_df.index.hour
-    aggr_df['Month'] = aggr_df.index.month
-
-    # remove hours with zero production (timestamp is UTC/ plants are in Australia)
-    bool_ind = aggr_df.groupby('Hour').mean()['POWER'] == 0
-    zero_hour = bool_ind.index.values[bool_ind.values]
-    aggr_df = aggr_df.query(f'Hour < {zero_hour.min()} or Hour>{zero_hour.max()}')
-
-    predictor_names = list(aggr_df.columns)
-    predictor_names.remove('POWER')
-
-    weather_variables = ['tclw','tciw','SP','rh','tcc','10u','10v','2T','SSRD','STRD','TSR','TP']
-    calendar_variables = ['Hour', 'Month']
-    all_variables = weather_variables + calendar_variables
-
-    feat_scaler = MinMaxScaler()
-    feat_scaler.fit(aggr_df[all_variables][config['start_date']:config['split_date_comb']])
-    aggr_df[all_variables] = feat_scaler.transform(aggr_df[all_variables])
-
-    ### Create train/test sets for all series
-    trainY = aggr_df['POWER'][config['start_date']:config['split_date_prob']].round(2)
-    comb_trainY = aggr_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
-    testY = aggr_df['POWER'][config['split_date_comb']:].round(2)
-
-    trainX_v1 = aggr_df[weather_variables][config['start_date']:config['split_date_prob']]
-    comb_trainX_v1 = aggr_df[weather_variables][config['split_date_prob']:config['split_date_comb']]
-    testX_v1 = aggr_df[weather_variables][config['split_date_comb']:]
-
-    trainX_v2 = aggr_df[calendar_variables+weather_variables][config['start_date']:config['split_date_prob']]
-    comb_trainX_v2 = aggr_df[calendar_variables+weather_variables][config['split_date_prob']:config['split_date_comb']]
-    testX_v2 = aggr_df[calendar_variables+weather_variables][config['split_date_comb']:]
-        
-    trainX_v3 = trainX_v1
-    comb_trainX_v3 = comb_trainX_v1
-    testX_v3 = testX_v1
-
-    tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'])]
-
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
 
@@ -708,19 +634,8 @@ for tup in tuple_list[row_counter:]:
         
         train_w_dict['cart'] = cart_find_weights(trainX_v2, comb_trainX_v2, cart_model)
         test_w_dict['cart'] = cart_find_weights(trainX_v2, testX_v2, cart_model)
-                
-        
-        # Random Forest
-        if dataset == 'solar':
-            #rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[100], 'max_features':[1, 2, 4, len(trainX_v3.columns)]}        
-            #rf_model_cv = GridSearchCV(ExtraTreesRegressor(), rf_parameters)
-            #rf_model_cv.fit(trainX_v3, trainY.values)    
-            #rf_model = rf_model_cv.best_estimator_
-            
-            rf_model = ExtraTreesRegressor(min_samples_leaf = 2, max_features = 4).fit(trainX_v3, trainY.values)
-        elif dataset == 'wind': 
-            rf_model = ExtraTreesRegressor(min_samples_leaf = 10, max_features = 2).fit(trainX_v3, trainY.values)
-
+                        
+        rf_model = ExtraTreesRegressor(min_samples_leaf = 10, max_features = 2).fit(trainX_v3, trainY.values)
         
         probabilistic_models['rf'] = rf_model
 
@@ -730,8 +645,6 @@ for tup in tuple_list[row_counter:]:
         rf_point_pred = rf_model.predict(testX_v3)
         knn_point_pred = knn_model_cv.best_estimator_.predict(testX_v1)
         cart_point_pred = cart_model.predict(testX_v2)
-
-        #%%
         
         # Translate weighted observations to discrete PDFs
         train_p_list = []
@@ -776,11 +689,11 @@ for tup in tuple_list[row_counter:]:
         
         plt.legend(['$k$$\mathtt{NN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'])
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
-        if dataset == 'wind':
-            plt.savefig(f'{cd}\\plots\\quantile_score_wind_forecast.pdf')
+        # if dataset == 'wind':
+        #     plt.savefig(f'{cd}\\plots\\quantile_score_wind_forecast.pdf')
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         plt.show()
-        #%%
+
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
@@ -796,13 +709,6 @@ for tup in tuple_list[row_counter:]:
         
         N_experts = len(all_learners)
         
-        #%%
-        # with open(f'{results_path}\\{filename_prefix}_test_w_dict.pickle', 'wb') as handle:
-        #     pickle.dump(test_w_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-        # with open(f'{results_path}\\{filename_prefix}_test_w_dict.pickle', 'wb') as handle:
-        #     pickle.dump(test_w_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
     #%%
     
     train_targetY = comb_trainY.values.reshape(-1)
@@ -814,16 +720,12 @@ for tup in tuple_list[row_counter:]:
     tensor_train_p_list = [torch.FloatTensor(train_p_list[i][:-valid_obs]) for i in range(N_experts)]
     
     # full training data sets (no validation)
-    tensor_trainY_full = torch.FloatTensor(train_targetY[:-valid_obs])
-    tensor_train_p_list_full = [torch.FloatTensor(train_p_list[i][:-valid_obs]) for i in range(N_experts)]
+    tensor_trainY_full = torch.FloatTensor(train_targetY)
+    tensor_train_p_list_full = [torch.FloatTensor(train_p_list[i]) for i in range(N_experts)]
 
     tensor_validY = torch.FloatTensor(train_targetY[-valid_obs:])
     tensor_valid_p_list = [torch.FloatTensor(train_p_list[i][-valid_obs:]) for i in range(N_experts)]
-        
-    #tensor_trainX = torch.FloatTensor(comb_trainX_date[:-valid_obs].values)
-    #tensor_validX = torch.FloatTensor(comb_trainX_date[-valid_obs:].values)
-    #tensor_testX = torch.FloatTensor(testX_date.values)
-    
+            
     train_data = torch.utils.data.TensorDataset(tensor_train_p_list[0], tensor_train_p_list[1], tensor_train_p_list[2], tensor_trainY)
     train_data_full = torch.utils.data.TensorDataset(tensor_train_p_list_full[0], tensor_train_p_list_full[1], tensor_train_p_list_full[2], 
                                                      tensor_trainY_full)
@@ -856,12 +758,6 @@ for tup in tuple_list[row_counter:]:
                                                      support = y_supp)
         
         lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
-    
-    # Benchmark/ Salva's suggestion/ weighted combination of in-sample optimal (stochastic) decisions
-    #lambda_ = averaging_decisions(grid, train_targetY, trainZopt, support = y_supp, bounds = False, risk_aversion = risk_aversion)
-
-    # lambda_static_dict['Insample'] = lambda_tuned_inv    
-    #lambda_static_dict['SalvaBench'] = lambda_
     #%%
     #% CRPS learning
     from torch_layers_functions import * 
@@ -899,7 +795,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
             
-            lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = 50, 
+            lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
                                               patience = patience, validation = False, relative_tolerance = 1e-5)
             print(f'Learned weights:{lpool_sched_model.get_weights()}')
             lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
@@ -919,18 +815,11 @@ for tup in tuple_list[row_counter:]:
     plt.legend()
     plt.show()
     
-    # Evaluate performance on test set
+    #### Evaluate performance on test set
     
     static_models = list(lambda_static_dict) 
-    
-    # # Adaptive combination model        
-    # adaptive_models_dict = {}   
-    # adaptive_models = list(adaptive_models_dict.keys())
-    # all_models = static_models + adaptive_models
-
     all_models = static_models
     
-    # lambda_adapt_dict = {}
     Prescriptions = {}
         
     temp_RT_cost = pd.DataFrame()
