@@ -207,12 +207,12 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     rt_cost = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb =  -gp.GRB.INFINITY)
 
     # RT Variables
-    w_rt = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
+    w_rt = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
     r_up = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0)
     r_down = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0)
 
-    G_shed = rt_sched.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0)
-    L_shed = rt_sched.addMVar((grid['n_loads']), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    G_shed = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
+    L_shed = rt_sched.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
 
     # Add generator constraints, DA & RT
     rt_sched.addConstr( p_DA + r_up <= grid['Pmax'].reshape(-1))    
@@ -222,15 +222,15 @@ def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     rt_sched.addConstr( r_up <= grid['R_u_max'].reshape(-1))
     rt_sched.addConstr( r_down <= grid['R_d_max'].reshape(-1))
 
-    rt_sched.addConstr( G_shed <= grid['Pmax'].reshape(-1))
-    rt_sched.addConstr( L_shed <= grid['Pd'].reshape(-1))
+    # rt_sched.addConstr( G_shed <= grid['Pmax'].reshape(-1))
+    # rt_sched.addConstr( L_shed <= grid['Pd'].reshape(-1))
         
     # RT balancing constraint    
     rt_sched.addConstr( p_DA.sum() + r_up.sum() - r_down.sum() - G_shed.sum() + grid['w_capacity']*w_rt.sum() + L_shed.sum() == grid['Pd'].sum())
     
     # Expected decision cost for DA + RT scheduling
     rt_sched.addConstr( da_cost == grid['Cost']@p_DA)
-    rt_sched.addConstr( rt_cost == (grid['C_up'])@r_up + (-grid['C_down'])@r_down + grid['VOLL']*L_shed.sum() + grid['VOLL']*G_shed.sum())
+    rt_sched.addConstr( rt_cost == (grid['C_up'])@r_up + (-grid['C_down'])@r_down + grid['VOLL']*(L_shed.sum() + G_shed.sum()))
 
     rt_sched.setObjective(rt_cost)
     
@@ -278,7 +278,7 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
 
     # DA Variables
     p_DA = stoch_market.addMVar((grid['n_unit']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'p_G')
-    slack_DA = stoch_market.addMVar((grid['n_loads']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'slack')
+    #slack_DA = stoch_market.addMVar((grid['n_loads']), vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'slack')
     #exp_w = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
     # cost variables
     da_cost = stoch_market.addMVar((1), vtype = gp.GRB.CONTINUOUS, lb = 0)
@@ -301,8 +301,8 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
     stoch_market.addConstr( r_down <= np.tile(grid['R_d_max'].reshape(-1,1), n_scen))
     
     # Slacks for real-time
-    stoch_market.addConstr( G_shed <= np.tile(grid['Pmax'].reshape(-1,1), n_scen))
-    stoch_market.addConstr( L_shed <= np.tile(grid['Pd'].reshape(-1,1), n_scen))
+    # stoch_market.addConstr( G_shed <= np.tile(grid['Pmax'].reshape(-1,1), n_scen))
+    # stoch_market.addConstr( L_shed <= np.tile(grid['Pd'].reshape(-1,1), n_scen))
         
     # DA balancing constraint
     #stoch_market.addConstr( p_DA.sum() + exp_w.sum() + slack_DA.sum() == grid['Pd'].sum())
@@ -316,7 +316,7 @@ def solve_stoch_sched(grid, scenarios, weights, regularization = 0):
 
     # Expected decision cost for DA + RT scheduling
     stoch_market.addConstr( da_cost == grid['Cost']@p_DA)
-    stoch_market.addConstrs( rt_cost[s] == (grid['C_up'])@r_up[:,s] + (-grid['C_down'])@r_down[:,s] + grid['VOLL']*L_shed[:,s].sum() + grid['VOLL']*G_shed[:,s].sum()
+    stoch_market.addConstrs( rt_cost[s] == (grid['C_up'])@r_up[:,s] + (-grid['C_down'])@r_down[:,s] + grid['VOLL']*(L_shed[:,s].sum() + G_shed[:,s].sum())
                             for s in range(n_scen))
 
     # Declare model once & solve for multiple test observations (speed up)
@@ -479,7 +479,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 0
+    params['target_ieee_case'] = 2
     
     params['train_static'] = True
     
@@ -795,6 +795,14 @@ for tup in tuple_list[row_counter:]:
         plt.show()
         
         N_experts = len(all_learners)
+        
+        #%%
+        # with open(f'{results_path}\\{filename_prefix}_test_w_dict.pickle', 'wb') as handle:
+        #     pickle.dump(test_w_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+        # with open(f'{results_path}\\{filename_prefix}_test_w_dict.pickle', 'wb') as handle:
+        #     pickle.dump(test_w_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
     #%%
     
     train_targetY = comb_trainY.values.reshape(-1)
@@ -834,7 +842,7 @@ for tup in tuple_list[row_counter:]:
     #%%
     ###########% Static forecast combinations
     lambda_static_dict = {}
-        
+    
     for i,learner in enumerate(all_learners):
         temp_ind = np.zeros(N_experts)
         temp_ind[i] = 1
@@ -858,9 +866,9 @@ for tup in tuple_list[row_counter:]:
     #% CRPS learning
     from torch_layers_functions import * 
 
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
-    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = batch_size, shuffle = False)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = batch_size, shuffle = False)
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 100, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 100, shuffle = False)
     
     if row_counter == 0:
         #### CRPS minimization/ with torch layer
@@ -879,11 +887,7 @@ for tup in tuple_list[row_counter:]:
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
     patience = 5
-    
-    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
-    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 100, shuffle = False)
-    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 100, shuffle = False)
-    
+
     #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]    
     config['gamma_list'] = [0, 0.1, 1]
     if config['train_static']:
@@ -895,7 +899,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
             
-            lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
+            lpool_sched_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = 50, 
                                               patience = patience, validation = False, relative_tolerance = 1e-5)
             print(f'Learned weights:{lpool_sched_model.get_weights()}')
             lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
@@ -937,6 +941,13 @@ for tup in tuple_list[row_counter:]:
     
     target_quant = np.arange(0.1, 1, 0.1).round(2)
     print('Estimating out-of-sample performance...')
+    
+    # Estimate cost of perfect foresight solution
+    perfect_foresight_DA_cost = perfect_scheduling_cost(grid, testY.values)
+    temp_DA_cost['Perfect'] = perfect_foresight_DA_cost
+    temp_RT_cost['Perfect'] = 0
+    #all_models = all_models + ['Perfect']
+
     for j, m in enumerate(all_models):
         print(m)
         # Combine PDFs for each observation
@@ -945,7 +956,6 @@ for tup in tuple_list[row_counter:]:
         temp_prescriptions = solve_stoch_sched(grid, y_supp, temp_pdf, regularization = risk_aversion)
 
         Prescriptions[m] = temp_prescriptions
-        print(m)
             
         # Estimate task-loss for specific model
         #%
@@ -954,24 +964,16 @@ for tup in tuple_list[row_counter:]:
         temp_RT_cost[m] = temp_rt_cost_out
         temp_DA_cost[m] = temp_da_cost_out
 
-        #%
-        print(m)
-        
         # Evaluate QS (approximation of CRPS) for each model
         # find quantile forecasts
         temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
         temp_qs = 100*pinball(temp_q_forecast, testY.values, target_quant).round(4)
-        print(m)
-
+        
         temp_mean_QS[m] = temp_qs.mean()
-    
-    # Estimate cost of perfect foresight solution
-    perfect_foresight_DA_cost = perfect_scheduling_cost(grid, testY.values)
-    temp_DA_cost['Perfect'] = perfect_foresight_DA_cost
-    temp_RT_cost['Perfect'] = 0
-    #all_models = all_models + ['Perfect']
-    
-    
+        
+        print('Regret')
+        print( ((temp_DA_cost + temp_RT_cost)[m] - temp_DA_cost['Perfect'].values[0]).mean().round(4))
+
     print('DA Decision Cost')
     print(temp_DA_cost[all_models].mean().round(4))
 
