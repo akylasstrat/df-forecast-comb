@@ -482,7 +482,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1] # !!! Do not change
-    params['target_ieee_case'] = 0
+    params['target_ieee_case'] = 1
     
     params['train_static'] = True
     
@@ -497,7 +497,7 @@ nn_hparam = gd_params()
 # results_path = f'{cd}\\results\\grid_scheduling'
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/akyla/pglib-opf/'
+pglib_path =  'C:/Users/astratig/pglib-opf/'
 
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
@@ -518,7 +518,7 @@ grid = load_grid_data(target_case, pglib_path)
 #%% Set up experiment parameters
 
 zone_target = config['target_zone']
-filename_prefix = f'NEWRESULTS_Z{zone_target[0]}_{target_case}_wind'
+print(f'Target zone:{zone_target}')
 
 step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
@@ -531,16 +531,17 @@ grid['Pmax'] = (grid['Pmax']/grid['Pmax'].sum())*(np.array( grid['w_capacity'] +
 np.random.seed(0)    
 grid['C_up'] = (1 + np.random.uniform(0.1, 5, len(grid['Cost'])))*grid['Cost']
 grid['C_down'] = (1 - np.random.uniform(0.8, 0.95, len(grid['Cost'])))*grid['Cost']
+filename_prefix = f'NEWRESULTS_Z{zone_target[0]}_{target_case}_wind'
 
-#%%
-## Update system parameters
-grid['Pd'] = 1.5*grid['Pd']
+# ## Update system parameters
+# grid['Pd'] = 1.5*grid['Pd']
+# grid['VOLL'] = 2000
 
-np.random.seed(0)    
-grid['C_up'] = (1 + np.random.uniform(0.3, 1, len(grid['Cost'])))*grid['Cost']
-grid['C_down'] = (1 - np.random.uniform(0.05, 0.2, len(grid['Cost'])))*grid['Cost']
+# np.random.seed(0)    
+# grid['C_up'] = (1 + np.random.uniform(0.3, 1, len(grid['Cost'])))*grid['Cost']
+# grid['C_down'] = (1 - np.random.uniform(0.05, 0.2, len(grid['Cost'])))*grid['Cost']
 
-filename_prefix = f'newcost_Z{zone_target[0]}_{target_case}_wind'
+# filename_prefix = f'newcost_Z{zone_target[0]}_{target_case}_wind'
 
 #%% Probabilistic forecasting models
 
@@ -750,7 +751,7 @@ for tup in tuple_list[row_counter:]:
         temp_z_opt = solve_stoch_sched(grid, y_supp, train_p_list[j], regularization = risk_aversion)
         trainZopt[j] = temp_z_opt
     
-    #%% Find perfect-foresight decisions
+    ### Find perfect-foresight decisions
     print('Find perfect-foresight decisions')
     train_oracle_DA_cost = perfect_scheduling_cost(grid, train_targetY, ave = False)
     
@@ -775,8 +776,8 @@ for tup in tuple_list[row_counter:]:
                                                      support = y_supp)
         
         lambda_static_dict[f'invW-{g}'] = lambda_tuned_inv    
-    #%%
-    #% CRPS learning
+    
+    ##########% CRPS learning
     from torch_layers_functions import * 
 
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
@@ -791,20 +792,18 @@ for tup in tuple_list[row_counter:]:
         lpool_crps_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 500, patience = 25, 
                                      validation = False)
 
-        #lambda_crps = crps_learning_combination(comb_trainY.values, train_p_list, support = y_supp, verbose = 1)  
     lambda_static_dict['CRPS'] = lpool_crps_model.get_weights()
-    # lambda_static_dict['CRPS'] = lpool_crps_model.weights.detach().numpy()
     print(lambda_static_dict['CRPS'])
     
     #%%
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
     patience = 5
-
+    
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY, tensor_train_oracle_DAcost], batch_size = 100, shuffle = False)
     train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full, tensor_train_oracle_DAcost_full], batch_size = 100, shuffle = False)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY, tensor_valid_oracle_DAcost_full], batch_size = 100, shuffle = False)
-
+    
     config['gamma_list'] = [0, 0.1, 1]
     if config['train_static']:
         
@@ -815,7 +814,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
             
-            lpool_sched_model.train_model(valid_data_loader, valid_data_loader, optimizer, epochs = 50, 
+            lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
                                               patience = patience, validation = False, relative_tolerance = 1e-5)
             print(f'Learned weights:{lpool_sched_model.get_weights()}')
             lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
