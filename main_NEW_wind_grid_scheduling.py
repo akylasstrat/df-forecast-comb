@@ -143,7 +143,7 @@ def insample_weight_tuning(grid, target_y, train_z_opt, train_prob_list,
 
     return lambdas_inv, lambdas_softmax
 
-def perfect_scheduling_cost(grid, actual, regularization = 0):
+def perfect_scheduling_cost(grid, actual, regularization = 0, ave = True):
     'Estimates the dispatch cost of the perfect foresight solution'
 
     actual_copy = actual.copy().reshape(-1)
@@ -184,7 +184,10 @@ def perfect_scheduling_cost(grid, actual, regularization = 0):
         Task_loss.append(model.ObjVal)
         
     Task_loss = np.array(Task_loss)
-    return Task_loss.mean()
+    if ave:
+        return Task_loss.mean()
+    else:
+        return Task_loss
 
 def scheduling_task_loss(grid, da_prescriptions, actual, regularization = 0):
     'Estimates aggregated DA+RT cost'
@@ -478,8 +481,8 @@ def params():
 
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 2
+    params['target_zone'] = [1] # !!! Do not change
+    params['target_ieee_case'] = 0
     
     params['train_static'] = True
     
@@ -494,7 +497,7 @@ nn_hparam = gd_params()
 # results_path = f'{cd}\\results\\grid_scheduling'
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/astratig/pglib-opf/'
+pglib_path =  'C:/Users/akyla/pglib-opf/'
 
 # load grid data
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
@@ -512,67 +515,74 @@ for i, case in enumerate(Cases):
 
 target_case = Cases[config['target_ieee_case']]
 grid = load_grid_data(target_case, pglib_path)
-#grid['Pd'][0] = grid['Pd'][0]  + 100
-grid['Pd'] = 1.5*grid['Pd']
+#%% Set up experiment parameters
 
-grid['Pd'] = np.array( grid['w_capacity'] + 100)
-grid['Pmax'] = (grid['Pmax']/grid['Pmax'].sum())*(np.array( grid['w_capacity'] + 150))
-
-#%%
-np.random.seed(0)    
-grid['C_up'] = (1 + np.random.uniform(0.1, 5, len(grid['Cost'])))*grid['Cost']
-grid['C_down'] = (1 - np.random.uniform(0.8, 0.95, len(grid['Cost'])))*grid['Cost']
-
-dataset = config['dataset']
+zone_target = config['target_zone']
+filename_prefix = f'NEWRESULTS_Z{zone_target[0]}_{target_case}_wind'
 
 step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
 nlocations = len(y_supp)
+
+## Update system parameters
+grid['Pd'] = np.array( grid['w_capacity'] + 100)
+grid['Pmax'] = (grid['Pmax']/grid['Pmax'].sum())*(np.array( grid['w_capacity'] + 150))
+
+np.random.seed(0)    
+grid['C_up'] = (1 + np.random.uniform(0.1, 5, len(grid['Cost'])))*grid['Cost']
+grid['C_down'] = (1 - np.random.uniform(0.8, 0.95, len(grid['Cost'])))*grid['Cost']
+
 #%%
-zone_target = config['target_zone']
-filename_prefix = f'NEWRESULTS_Z{zone_target[0]}_{target_case}_{dataset}'
+## Update system parameters
+grid['Pd'] = 1.5*grid['Pd']
 
-if dataset == 'wind':
-    # Load wind data and pre-processing
+np.random.seed(0)    
+grid['C_up'] = (1 + np.random.uniform(0.3, 1, len(grid['Cost'])))*grid['Cost']
+grid['C_down'] = (1 - np.random.uniform(0.05, 0.2, len(grid['Cost'])))*grid['Cost']
+
+filename_prefix = f'newcost_Z{zone_target[0]}_{target_case}_wind'
+
+#%% Probabilistic forecasting models
+
+# Load wind data and pre-processing
+
+config['start_date'] = '2012-01-01'
+config['split_date_prob'] = '2013-01-01' # Defines train/test split
+config['split_date_comb'] = '2013-07-01' # Defines train/test split
+config['end_date'] = '2014-01-01'
+
+aggr_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, header = [0,1])
     
-    config['start_date'] = '2012-01-01'
-    config['split_date_prob'] = '2013-01-01' # Defines train/test split
-    config['split_date_comb'] = '2013-07-01' # Defines train/test split
-    config['end_date'] = '2014-01-01'
 
-    aggr_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, header = [0,1])
-    
+target_problem = config['problem']
+expert_zone = ['Z7', 'Z8', 'Z9']
+risk_aversion = config['risk_aversion']
 
-    target_problem = config['problem']
-    expert_zone = ['Z7', 'Z8', 'Z9']
-    risk_aversion = config['risk_aversion']
+tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'])]
 
+# keep only relevant data
+zone_df = aggr_df.copy()['Z1']
 
-    tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'])]
+feat_scaler = MinMaxScaler()
 
-    # keep only relevant data
-    zone_df = aggr_df.copy()['Z1']
+### Create train/test sets for all series
+trainY = zone_df['POWER'][config['start_date']:config['split_date_prob']].round(2)
+comb_trainY = zone_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
+testY = zone_df['POWER'][config['split_date_comb']:].round(2)
 
-    feat_scaler = MinMaxScaler()
-    
-    ### Create train/test sets for all series
-    trainY = zone_df['POWER'][config['start_date']:config['split_date_prob']].round(2)
-    comb_trainY = zone_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
-    testY = zone_df['POWER'][config['split_date_comb']:].round(2)
+expert_zones = ['Z2', 'Z3', 'Z4']
 
-    expert_zones = ['Z2', 'Z3', 'Z4']
-    
-    trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
-    comb_trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
-    testX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
-    
-    trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
-    comb_trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
-    testX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
-    
-    trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
-    comb_trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
-    testX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+
+trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v2 = aggr_df[expert_zones[1]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
+
+trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
+comb_trainX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_prob']:config['split_date_comb']]
+testX_v3 = aggr_df[expert_zones[2]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['split_date_comb']:]
     
 n_obs = len(comb_trainY)
 n_test_obs = len(testY)
@@ -710,7 +720,6 @@ for tup in tuple_list[row_counter:]:
         N_experts = len(all_learners)
         
     #%%
-    
     train_targetY = comb_trainY.values.reshape(-1)
     
     # Supervised learning set as tensors for PyTorch
@@ -736,10 +745,18 @@ for tup in tuple_list[row_counter:]:
     trainZopt = N_experts*[np.zeros((n_train_obs, grid['n_unit']))]
     testZopt = N_experts*[np.zeros((n_test_obs, grid['n_unit']))]
 
-    print('Finding optimal decisions in training set')
+    print('Finding optimal stochastic decisions (per expert) in training set')
     for j in range(N_experts):
         temp_z_opt = solve_stoch_sched(grid, y_supp, train_p_list[j], regularization = risk_aversion)
         trainZopt[j] = temp_z_opt
+    
+    #%% Find perfect-foresight decisions
+    print('Find perfect-foresight decisions')
+    train_oracle_DA_cost = perfect_scheduling_cost(grid, train_targetY, ave = False)
+    
+    tensor_train_oracle_DAcost = torch.FloatTensor(train_oracle_DA_cost[:-valid_obs])
+    tensor_train_oracle_DAcost_full = torch.FloatTensor(train_oracle_DA_cost)
+    tensor_valid_oracle_DAcost_full = torch.FloatTensor(train_oracle_DA_cost[-valid_obs:])
         
     #%%
     ###########% Static forecast combinations
@@ -765,7 +782,7 @@ for tup in tuple_list[row_counter:]:
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 100, shuffle = False)
     train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 100, shuffle = False)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 100, shuffle = False)
-    
+        
     if row_counter == 0:
         #### CRPS minimization/ with torch layer
         lpool_crps_model = LinearPoolCRPSLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp), 
@@ -784,7 +801,10 @@ for tup in tuple_list[row_counter:]:
     from torch_layers_functions import * 
     patience = 5
 
-    #lambda_static_dict['DF_0'] = [0.32049093, 0.3465582, 0.33295092]    
+    train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY, tensor_train_oracle_DAcost], batch_size = 100, shuffle = False)
+    train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full, tensor_train_oracle_DAcost_full], batch_size = 100, shuffle = False)
+    valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY, tensor_valid_oracle_DAcost_full], batch_size = 100, shuffle = False)
+
     config['gamma_list'] = [0, 0.1, 1]
     if config['train_static']:
         
@@ -795,7 +815,7 @@ for tup in tuple_list[row_counter:]:
             
             optimizer = torch.optim.Adam(lpool_sched_model.parameters(), lr = learning_rate)
             
-            lpool_sched_model.train_model(train_data_loader_full, valid_data_loader, optimizer, epochs = 50, 
+            lpool_sched_model.train_model(valid_data_loader, valid_data_loader, optimizer, epochs = 50, 
                                               patience = patience, validation = False, relative_tolerance = 1e-5)
             print(f'Learned weights:{lpool_sched_model.get_weights()}')
             lambda_static_dict[f'DF_{gamma}'] = lpool_sched_model.get_weights()
