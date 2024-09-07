@@ -1024,8 +1024,8 @@ class LinearPoolSchedLayer(nn.Module):
                                                      + grid['VOLL']*(slack_up[s] + slack_down[s]))  for s in range(n_locations)])
             
             # L2 regularization
-            # l2_reg_expr = cp.sum([ prob_weights[s]*(cp.sum_squares(r_up[:,s] + r_down[:,s]) + cp.sum_squares(slack_up[s] + slack_down[s]))  for s in range(n_locations)])            
-            objective_funct = cp.Minimize( cost_DA +  RT_cost_expr ) 
+            l2_reg_expr = cp.sum([ prob_weights[s]*(cp.sum_squares(r_up[:,s] + r_down[:,s]) + cp.sum_squares(slack_up[s] + slack_down[s]))  for s in range(n_locations)])            
+            objective_funct = cp.Minimize( cost_DA +  RT_cost_expr) 
                         
             sched_problem = cp.Problem(objective_funct, DA_constraints + RT_constraints )
              
@@ -1089,7 +1089,7 @@ class LinearPoolSchedLayer(nn.Module):
         
         l2_pen = cp.sum_squares(r_up + r_down) + cp.sum_squares(g_shed + l_shed) 
         
-        objective_funct = cp.Minimize( cost_RT + 0.0001*l2_pen) 
+        objective_funct = cp.Minimize( cost_RT + 0.001*l2_pen) 
         rt_problem = cp.Problem(objective_funct, RT_sched_constraints)
          
         self.rt_layer = CvxpyLayer(rt_problem, parameters=[p_gen, w_actual],
@@ -1138,7 +1138,7 @@ class LinearPoolSchedLayer(nn.Module):
         
         # Pass the combined output to the CVXPY layer
         try:
-            cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':20_000, "solve_method": "ECOS"})
+            cvxpy_output = self.sched_layer(combined_pdf, solver_args={'max_iters':50_000, "solve_method": "ECOS"})
         except:
             cvxpy_output = self.sched_layer(combined_pdf, solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
         
@@ -1155,8 +1155,8 @@ class LinearPoolSchedLayer(nn.Module):
             
 
             prob_forecast_batch = batch_data[:self.num_inputs]
-            y_batch = batch_data[self.num_inputs]
-            perfect_DA_cost_batch = batch_data[self.num_inputs + 1]
+            y_batch = batch_data[self.num_inputs].reshape(-1,1)
+            perfect_DA_cost_batch = batch_data[self.num_inputs + 1].reshape(-1,1)
             
             # print(len(prob_forecast_batch))
             # print(prob_forecast_batch[0].shape)
@@ -1182,26 +1182,26 @@ class LinearPoolSchedLayer(nn.Module):
             start_time = time.time()
             try:
                 rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), 
-                                          solver_args={'max_iters':10_000, "solve_method": "ECOS"})
+                                          solver_args={'max_iters':50_000, "solve_method": "ECOS"})
             except:
                 rt_output = self.rt_layer(p_hat_proj, y_batch.reshape(-1,1), 
                                           solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
                 
             if i == 0: 
                 print(f'Forward pass, RT market:{time.time() - start_time}')
-                        
-            # cost_DA_hat_i = decisions_hat[-1]/ self.Pmax_tensor.sum()
-            # cost_RT_i = rt_output[-1]/ self.Pmax_tensor.sum()
-                        
-            cost_DA_hat_i = decisions_hat[-1]
-            cost_RT_i = rt_output[-1]
-            
-            relative_regret_i = (cost_DA_hat_i + cost_RT_i - perfect_DA_cost_batch)/perfect_DA_cost_batch
             
             # CRPS of combination
             crps_i = torch.sum(torch.square( cdf_comb_hat - 1*(self.support >= y_batch.reshape(-1,1))), 1).reshape(-1,1)
+
+            cost_DA_hat_i = decisions_hat[-1]/ self.Pmax_tensor.sum()
+            cost_RT_i = rt_output[-1]/ self.Pmax_tensor.sum()
+            loss_i = cost_DA_hat_i + cost_RT_i + self.gamma*crps_i
+                        
+            # cost_DA_hat_i = decisions_hat[-1]
+            # cost_RT_i = rt_output[-1]            
+            # relative_regret_i = (cost_DA_hat_i + cost_RT_i - perfect_DA_cost_batch)/perfect_DA_cost_batch
+            # loss_i = relative_regret_i + self.gamma*crps_i
             
-            loss_i = relative_regret_i + self.gamma*crps_i
             loss = torch.mean(loss_i)
             
             if opt:
