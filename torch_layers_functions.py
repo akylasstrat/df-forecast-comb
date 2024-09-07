@@ -358,56 +358,24 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                     
         n_locations = len(self.support)
 
-        if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-            # newsvendor layer (for i-th observation)
-            z = cp.Variable((1), nonneg = True)    
-            #pinball_loss = cp.Variable(n_locations)
-            error = cp.Variable(n_locations)
-            prob_weights = cp.Parameter(n_locations, nonneg = True)
-            sqrt_prob_weights = cp.Parameter(n_locations, nonneg = True)
+        # newsvendor layer (for i-th observation)
+        z = cp.Variable((1), nonneg = True)    
+        error = cp.Variable(n_locations)
+        prob_weights = cp.Parameter(n_locations, nonneg = True)
+        sqrt_prob_weights = cp.Parameter(n_locations, nonneg = True)
 
-            newsv_constraints = [error == self.support - z]
-            #                     pinball_loss >= self.crit_fract*(error), 
-            #                     pinball_loss >= (self.crit_fract - 1)*(error)]
-            pinball_loss_expr = cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))
-            newsv_cost = prob_weights@pinball_loss_expr
-            
-            # define aux variable
-            #w_error = cp.multiply(prob_weights, error)
-            #sq_error = cp.power(error, 2)
-            w_error = cp.multiply(sqrt_prob_weights, error)
-            l2_regularization = cp.sum_squares(w_error)
-    
-            #l2_regularization = (prob_weights@sq_error)
-    
-            objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
-            
-            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
-                                               variables = [z, error] )
-        elif self.problem == 'pwl':
-            # newsvendor layer (for i-th observation)
-            z = cp.Variable((1))    
-            pwl_loss = cp.Variable(n_locations)
-            error = cp.Variable(n_locations)
-            prob_weights = cp.Parameter(n_locations)
-            sqrt_prob_weights = cp.Parameter(n_locations)
+        newsv_constraints = [error == self.support - z]
+        pinball_loss_expr = cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))
+        newsv_cost = prob_weights@pinball_loss_expr
+        
+        w_error = cp.multiply(sqrt_prob_weights, error)
+        l2_regularization = cp.sum_squares(w_error)
 
-            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                                 pwl_loss >= self.crit_fract*(error),
-                                 pwl_loss >= -0.5*(error),
-                                 pwl_loss >= (1-self.crit_fract)*(error + 0.1)]
-            
-            newsv_cost = prob_weights@pwl_loss
-            
-            w_error = cp.multiply(sqrt_prob_weights, error)
-            l2_regularization = cp.sum_squares(w_error)
-
-            objective_funct = cp.Minimize( newsv_cost + (self.risk_aversion)*l2_regularization)             
-            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-            
-            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
-                                               variables = [z, pwl_loss, error] )
+        objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
+        
+        newsv_problem = cp.Problem(objective_funct, newsv_constraints)
+        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
+                                           variables = [z, error] )
     
     def simplex_projection(self, w_init):
         """
@@ -448,9 +416,11 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
         
         # Pass the combined output to the CVXPY layer
-        if (self.problem == 'reg_trad') or (self.problem == 'newsvendor') or (self.problem == 'pwl'):
-            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={'max_iters':100_000, "solve_method": "ECOS"})
-
+        try:
+            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={'max_iters':50_000, "solve_method": "ECOS"})
+        except:
+            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
+               
         return combined_pdf, cvxpy_output
 
 
@@ -548,11 +518,6 @@ class AdaptiveLinearPoolNewsvendorLayer(nn.Module):
                 loss.backward()
                 opt.step()
                                 
-                # if self.projection_simplex == True:
-                #     w_proj = self.simplex_projection(self.weights.clone())
-                #     with torch.no_grad():
-                #         self.weights.copy_(torch.FloatTensor(w_proj))
-                    
             total_loss += loss.item() * y_batch.shape[0]
             
         return total_loss / len(data_loader.dataset)
@@ -585,58 +550,27 @@ class LinearPoolNewsvendorLayer(nn.Module):
 
         n_locations = len(self.support)
         
-        if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-            # newsvendor layer (for i-th observation)
-            z = cp.Variable((1), nonneg = True)    
-            #pinball_loss = cp.Variable(n_locations, nonneg = True)
-            error = cp.Variable(n_locations)
-            prob_weights = cp.Parameter(n_locations, nonneg = True)
-            sqrt_prob_weights = cp.Parameter(n_locations, nonneg = True)
-            
-            newsv_constraints = []
-            newsv_constraints += [error == self.support - z, z <= self.support.max()]
-            #newsv_constraints += [pinball_loss >= self.crit_fract*(error), pinball_loss >= (self.crit_fract - 1)*(error)]
-            
-            pinball_loss_expr = cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))
-            newsv_cost = prob_weights@pinball_loss_expr
-            # print(newsv_cost.shape)
-            # print((self.support - z).shape)
-            # print((cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))).shape)
+        # newsvendor layer (for i-th observation)
+        z = cp.Variable((1), nonneg = True)    
+        error = cp.Variable(n_locations)
+        prob_weights = cp.Parameter(n_locations, nonneg = True)
+        sqrt_prob_weights = cp.Parameter(n_locations, nonneg = True)
+        
+        newsv_constraints = []
+        newsv_constraints += [error == self.support - z, z <= self.support.max()]
+        
+        pinball_loss_expr = cp.maximum(self.crit_fract*(error), (self.crit_fract - 1)*(error))
+        newsv_cost = prob_weights@pinball_loss_expr
 
-            # define aux variable
-            # w_error = cp.multiply(prob_weights, error)
-            # sq_error = cp.power(error, 2)
-            w_error = cp.multiply(sqrt_prob_weights, error)
-            l2_regularization = cp.sum_squares(w_error)
-            
-            #l2_regularization = (prob_weights@sq_error)
-            objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
-            
-            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
-                                               variables = [z, error] )
-        elif self.problem == 'pwl':
-            # newsvendor layer (for i-th observation)
-            z = cp.Variable((1))    
-            pwl_loss = cp.Variable(n_locations)
-            error = cp.Variable(n_locations)
-            prob_weights = cp.Parameter(n_locations)
-            sqrt_prob_weights = cp.Parameter(n_locations)
-
-            newsv_constraints = [z >= 0, z <= 1, error == self.support - z,
-                                 pwl_loss >= self.crit_fract*(error),
-                                 pwl_loss >= -0.5*(error),
-                                 pwl_loss >= (1-self.crit_fract)*(error + 0.1)]
-            
-            w_error = cp.multiply(sqrt_prob_weights, error)
-            l2_regularization = cp.sum_squares(w_error)
-
-            objective_funct = cp.Minimize( prob_weights@pwl_loss + self.risk_aversion*l2_regularization)             
-            newsv_problem = cp.Problem(objective_funct, newsv_constraints)
-            
-            self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
-                                               variables = [z, pwl_loss, error] )
-
+        w_error = cp.multiply(sqrt_prob_weights, error)
+        l2_regularization = cp.sum_squares(w_error)
+        
+        #l2_regularization = (prob_weights@sq_error)
+        objective_funct = cp.Minimize( 2*(1-self.risk_aversion)*newsv_cost + 2*(self.risk_aversion)*l2_regularization ) 
+        
+        newsv_problem = cp.Problem(objective_funct, newsv_constraints)
+        self.newsvendor_layer = CvxpyLayer(newsv_problem, parameters=[prob_weights, sqrt_prob_weights],
+                                           variables = [z, error] )
 
     def get_weights(self):
         if self.feasibility_method == 'softmax':
@@ -672,8 +606,11 @@ class LinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        if self.problem in ['reg_trad', 'newsvendor', 'pwl']:
-            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={'max_iters':100_000, "solve_method": "ECOS"})
+        
+        try:            
+            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={'max_iters':50_000, "solve_method": "ECOS"})
+        except:
+            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
             
         return combined_pdf, cvxpy_output
     
@@ -769,17 +706,13 @@ class LinearPoolNewsvendorLayer(nn.Module):
             # estimate aggregate pinball loss and CRPS (for realization of uncertainty)
             error_hat = (y_batch.reshape(-1,1) - z_hat)
             
-            # crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
             crps_i = torch.sum(torch.square( cdf_comb_hat - 1*(self.support >= y_batch.reshape(-1,1))), 1).reshape(-1,1)
 
             sql2_loss_i = torch.square(error_hat)
             
-            if (self.problem == 'reg_trad') or (self.problem == 'newsvendor'):
-                pinball_loss_i = torch.max(self.crit_fract*error_hat, (self.crit_fract-1)*error_hat)
+            pinball_loss_i = torch.max(self.crit_fract*error_hat, (self.crit_fract-1)*error_hat)
 
-                # Total regret (scale CRPS for better trade-off control)
-                loss_i = (1-self.risk_aversion)*pinball_loss_i + self.risk_aversion*sql2_loss_i \
-                    + self.gamma*crps_i
+            loss_i = (1-self.risk_aversion)*pinball_loss_i + self.risk_aversion*sql2_loss_i + self.gamma*crps_i
             loss = torch.mean(loss_i)
             
             if opt:
@@ -787,17 +720,11 @@ class LinearPoolNewsvendorLayer(nn.Module):
                 loss.backward()
                 opt.step()
                 
-                # print('before projection')
-                # print(self.weights)
-                # if self.projection_simplex == True:                
                 if self.feasibility_method == 'projection':
                     w_proj = self.simplex_projection(self.weights.clone())
                     with torch.no_grad():
                         self.weights.copy_(torch.FloatTensor(w_proj))
-                    
-                    # print('after projection')
-                    # print(self.weights)
-
+    
             total_loss += loss.item() * y_batch.shape[0]
             
         return total_loss / len(data_loader.dataset)
