@@ -479,7 +479,7 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [2] # !!! Do not change
-    params['target_ieee_case'] = 1
+    params['target_ieee_case'] = 2
     
     params['train_static'] = True
     
