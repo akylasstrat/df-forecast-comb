@@ -36,7 +36,7 @@ def params():
 
 #%% Grid scheduling results
 config = params()
-zone = 'Z2' # do not change this
+zone = 'Z1' # do not change this
 Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m']
 case = Cases[0]
 label_dict = {'Ave':'$\mathtt{OLP}$', 'CRPS':'$\mathtt{CRPSL}$', 
