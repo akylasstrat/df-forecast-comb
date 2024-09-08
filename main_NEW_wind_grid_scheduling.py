@@ -531,6 +531,7 @@ grid['Pmax'] = (grid['Pmax']/grid['Pmax'].sum())*(np.array( grid['w_capacity'] +
 np.random.seed(0)    
 grid['C_up'] = (1 + np.random.uniform(0.1, 5, len(grid['Cost'])))*grid['Cost']
 grid['C_down'] = (1 - np.random.uniform(0.8, 0.95, len(grid['Cost'])))*grid['Cost']
+
 filename_prefix = f'NEWRESULTS_Z{zone_target[0]}_{target_case}_wind'
 
 # ## Update system parameters
@@ -759,7 +760,7 @@ for tup in tuple_list[row_counter:]:
     tensor_train_oracle_DAcost_full = torch.FloatTensor(train_oracle_DA_cost)
     tensor_valid_oracle_DAcost_full = torch.FloatTensor(train_oracle_DA_cost[-valid_obs:])
         
-    #%%
+    
     ###########% Static forecast combinations
     lambda_static_dict = {}
     
@@ -795,7 +796,7 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['CRPS'] = lpool_crps_model.get_weights()
     print(lambda_static_dict['CRPS'])
     
-    #%%
+    
     ##### Decision-focused combination for different values of gamma     
     from torch_layers_functions import * 
     patience = 5
