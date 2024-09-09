@@ -606,11 +606,11 @@ class LinearPoolNewsvendorLayer(nn.Module):
         combined_pdf = sum(weighted_inputs)
 
         # Pass the combined output to the CVXPY layer
-        
-        try:            
-            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={'max_iters':50_000, "solve_method": "ECOS"})
-        except:
-            cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
+        cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})        
+        # try:            
+        #     cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={'max_iters':10_000, "solve_method": "ECOS"})
+        # except:
+        #     cvxpy_output = self.newsvendor_layer(combined_pdf, torch.sqrt(combined_pdf + 1e-4), solver_args={"eps": 1e-8, "max_iters": 10000, "acceleration_lookback": 0})
             
         return combined_pdf, cvxpy_output
     
@@ -692,12 +692,17 @@ class LinearPoolNewsvendorLayer(nn.Module):
         # evaluate loss criterion/ used for estimating validation loss
         total_loss = 0.0
 
-        for batch_data in data_loader:
+        for i, batch_data in enumerate(data_loader):
             y_batch = batch_data[-1]
 
             # forward pass: combine forecasts and solve each newsvendor problem
+            start_time = time.time()
+
             output_hat = self.forward(batch_data[:-1])
 
+            if i == 0:
+                print(f'Time for a single forward pass:{time.time() - start_time}')
+                
             pdf_comb_hat = output_hat[0]
             cdf_comb_hat = pdf_comb_hat.cumsum(1)
             
@@ -748,6 +753,9 @@ class LinearPool_VFA_Layer(nn.Module):
         self.crit_fract = critic_fract
         self.problem = problem
 
+        for param in self.vfa_model.model.parameters():
+            param.requires_grad = False
+    
         n_locations = len(self.support)
         
     def forward(self, list_inputs):
@@ -860,8 +868,8 @@ class LinearPool_VFA_Layer(nn.Module):
             # crps_i = sum([torch.square( cdf_comb_hat[i] - 1*(self.support >= y_batch[i]) ).sum() for i in range(len(y_batch))])
             crps_i = torch.sum(torch.square( cdf_comb_hat - 1*(self.support >= y_batch.reshape(-1,1))), 1).reshape(-1,1)
                             
-            # loss_i = self.vfa_model.forward(pdf_comb_hat)
-            loss_i = pdf_comb_hat@w.T + bias
+            loss_i = self.vfa_model.forward(pdf_comb_hat)
+            # loss_i = pdf_comb_hat@w.T + bias
                 
             loss = torch.mean(loss_i)
             

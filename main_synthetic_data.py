@@ -33,56 +33,6 @@ plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
-# def insample_weight_tuning(target_y, train_z_opt, problem = 'newsvendor', 
-#                            support = np.arange(0, 1.01, .01).round(2), verbose = 0, **kwargs):
-#     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
-#         set weights based on inverse cost (or could use softmax activation)
-#         - Args:
-#             target_y: realizations of uncertainty
-#             prob_vectors: list of predictive PDFs
-#             crit_fract: critical fractile for newsvendor problem
-#             support: support locations
-#         - Output:
-#             lambdas_inv: weights based on inverse in-sample performance'''
-    
-#     n_obs = train_z_opt
-#     n_models = train_z_opt.shape[1]
-    
-#     risk_aversion = kwargs['risk_aversion']
-#     crit_quant = kwargs['crit_quant']
-#     ### Find optimal decisions under perfect foresight information
-    
-#     print('Solve in-sample stochastic problems...')
-    
-#     #z_opt = np.zeros((n_obs, n_models))
-#     insample_cost = np.zeros((n_models))
-#     insample_inverse_cost = np.zeros((n_models))
-
-#     for j in range(n_models):
-#         '''
-#         if problem == 'newsvendor':
-#             for i in range(n_obs):
-#                 # Solve stochastic problem, find decision
-#                 z_opt[i,j] = inverted_cdf([crit_fract], support, prob_vectors[j][i])
-#             # Estimate decision cost (regret)
-#         elif problem == 'reg_trad':
-            
-#             temp_w_mat = np.array(prob_vectors[j])
-
-#             temp_z_opt = solve_opt_prob(support, temp_w_mat, problem, risk_aversion = risk_aversion, 
-#                                         crit_quant = crit_quant)
-#             z_opt[:,j] = temp_z_opt
-#         '''
-#         #insample_cost[j] = newsvendor_loss(z_opt[:,j], target_y.reshape(-1), q = crit_fract)
-#         insample_cost[j] = task_loss(train_z_opt[:,j], target_y.reshape(-1), problem, risk_aversion = risk_aversion, 
-#                                      crit_quant = crit_quant)
-#         insample_inverse_cost[j] = 1/insample_cost[j]
-
-#     lambdas_inv = insample_inverse_cost/insample_inverse_cost.sum()
-#     lambdas_softmax = np.exp(insample_inverse_cost)/sum(np.exp(insample_inverse_cost))
-
-#     return lambdas_inv, lambdas_softmax
-
 def insample_weight_tuning(target_y, train_z_opt, train_prob_list, problem = 'newsvendor', 
                            support = np.arange(0, 1.01, .01).round(2), regularization_gamma = 0, verbose = 0, **kwargs):
     ''' For each observation and each expert, solve the stochastic problem, find expected in-sample decision cost, 
@@ -147,28 +97,7 @@ def task_loss(pred, actual, problem, **kwargs):
 
     elif problem == 'newsvendor':
         return np.maximum(kwargs['crit_quant']*(actual_copy - pred_copy), (kwargs['crit_quant']-1)*(actual_copy - pred_copy)).mean()
-
-    elif problem == 'cvar':
-        pinball_loss = np.maximum(kwargs['crit_quant']*(actual_copy - pred_copy), (kwargs['crit_quant']-1)*(actual_copy - pred_copy))    
-        #profit = 2e3*(27*actual_copy - pinball_loss)
-        cvar_mask = pinball_loss >= np.quantile(pinball_loss, 1-kwargs['epsilon'])
-
-        task_loss = ((1-kwargs['risk_aversion'])*pinball_loss.mean() + kwargs['risk_aversion']*pinball_loss[cvar_mask].mean()) 
-        
-        return task_loss
     
-    elif problem == 'pwl':
-
-        deviation = actual_copy - pred_copy
-        square_loss = np.square(deviation)          
-
-        p1 = kwargs['crit_quant']*deviation
-        p2 = -0.5*deviation        
-        p3 = (kwargs['crit_quant']-1)*(deviation + 0.1)        
-        pwl_loss = np.maximum.reduce([p1, p2, p3])        
-        return pwl_loss.mean() + kwargs['risk_aversion']*square_loss.mean()
-
-
     elif problem == 'reg_trad':
 
         deviation = actual_copy - pred_copy
@@ -198,204 +127,37 @@ def solve_opt_prob(scenarios, weights, problem, **kwargs):
         target_scen = scenarios.copy()
         
     n_scen = len(target_scen)
-    
-    if problem == 'cvar':
-        # CVaR tail probability
         
-        m = gp.Model()
+    if problem in ['reg_trad', 'newsvendor']:
+        # regularized newsvendor problem
+        # solve for multiple test observations/ declares gurobi model once for speed up
+        n_test_obs = len(weights)
+        Prescriptions = np.zeros((n_test_obs))
+        m = gp.Model()            
         m.setParam('OutputFlag', 0)
-        ################################################
-        #CVaR: auxiliary parameters
-        # Multi-temporal: Minimize average Daily costs
-        ### Variables
-        offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, ub = 1)
+
+        # variables
+        offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
         deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-        loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0)
-        profit = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-
-        ### CVaR variables (follows Georghiou, Kuhn, et al.)
-        beta = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name='VaR')
-        zeta = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0)  # Aux
-        cvar = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-         
-        m.addConstr( deviation == target_scen - offer)
+        loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
+        t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'aux')
         
-        m.addConstr( loss >= (crit_quant)*deviation)
-        m.addConstr( loss >= (crit_quant-1)*deviation)
-
-        m.addConstr( profit == (target_scen*27 - loss) )            
-        m.addConstr( zeta >= beta - profit)
-
-        #m.addConstr( zeta >=  -beta + loss )
-        #m.addConstr( cvar == beta + (1/e)*(zeta@weights))
-        m.addConstr( cvar == beta - (1/(1-e))*(zeta@weights) )            
-        m.setObjective( (1-risk_aversion)*(profit@weights) + risk_aversion*(cvar), gp.GRB.MAXIMIZE )
+        # constraints
+        m.addConstr(deviation == (target_scen - offer) )
+        m.addConstr(loss >= crit_quant*deviation )
+        m.addConstr(loss >= (crit_quant-1)*deviation )
+        m.setObjective( t, gp.GRB.MINIMIZE)
         
-        #m.setObjective( 0, gp.GRB.MINIMIZE)
-        
-        m.optimize()
-        return offer.X[0]
+        for row in range(len(weights)):
+            c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) 
+                           + 2*risk_aversion*(deviation@(deviation*weights[row])))
+
+            m.optimize()
+            m.remove(c1)
+            Prescriptions[row] = offer.X[0]
+            
+        return Prescriptions
     
-    elif problem == 'reg_trad':
-        # regularized newsvendor problem
-        if weights.ndim == 1:
-            # solve for a single problem instance
-            m = gp.Model()
-            
-            m.setParam('OutputFlag', 0)
-
-            # target variable
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-
-            m.addConstr(deviation == (target_scen - offer) )
-            
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation) )
-            
-            m.setObjective( (1-risk_aversion)*(weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
-            m.optimize()
-                
-            return offer.X
-        
-        else:
-            # solve for multiple test observations/ declares gurobi model once for speed up
-            n_test_obs = len(weights)
-            Prescriptions = np.zeros((n_test_obs))
-            m = gp.Model()            
-            m.setParam('OutputFlag', 0)
-
-            # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'aux')
-            
-            # constraints
-            m.addConstr(deviation == (target_scen - offer) )
-            m.addConstr(loss >= crit_quant*deviation )
-            m.addConstr(loss >= (crit_quant-1)*deviation )
-            m.setObjective( t, gp.GRB.MINIMIZE)
-            
-            for row in range(len(weights)):
-                c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) 
-                               + 2*risk_aversion*(deviation@(deviation*weights[row])))
-
-                m.optimize()
-                
-                m.remove(c1)
-                
-                Prescriptions[row] = offer.X[0]
-                
-            return Prescriptions
-    
-    elif (problem == 'reg_trad') or (problem == 'newsvendor'):
-        # regularized newsvendor problem
-        if weights.ndim == 1:
-            # solve for a single problem instance
-            m = gp.Model()
-            
-            m.setParam('OutputFlag', 0)
-
-            # target variable
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-
-            m.addConstr(deviation == (target_scen - offer) )
-            
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation) )
-            
-            m.setObjective( (1-risk_aversion)*(weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
-            m.optimize()
-                
-            return offer.X
-        
-        else:
-            # solve for multiple test observations/ declares gurobi model once for speed up
-            n_test_obs = len(weights)
-            Prescriptions = np.zeros((n_test_obs))
-            m = gp.Model()            
-            m.setParam('OutputFlag', 0)
-
-            # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            
-            # constraints
-            m.addConstr(deviation == (target_scen - offer) )
-            m.addConstr(loss >= crit_quant*deviation )
-            m.addConstr(loss >= (crit_quant-1)*deviation )
-            m.setObjective( t, gp.GRB.MINIMIZE)
-            
-            for row in range(len(weights)):
-                c1 = m.addConstr(t >= 2*(1-risk_aversion)*(weights[row]@loss) 
-                               + 2*risk_aversion*(deviation@(deviation*weights[row])))
-
-                m.optimize()
-                
-                m.remove(c1)
-                
-                Prescriptions[row] = offer.X[0]
-                
-            return Prescriptions
-    elif problem == 'pwl':
-        # regularized newsvendor problem
-        if weights.ndim == 1:
-            # solve for a single problem instance
-            m = gp.Model()
-            
-            m.setParam('OutputFlag', 0)
-
-            # target variable
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY, name = 'offer')
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-
-            m.addConstr(deviation == (target_scen - offer) )
-            
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= -0.5*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation + 0.1) )
-            
-            m.setObjective( (weights@loss) + risk_aversion*(deviation@(deviation*weights)), gp.GRB.MINIMIZE)
-            m.optimize()
-                
-            return offer.X
-        
-        else:
-            # solve for multiple test observations/ declares gurobi model once for speed up
-            n_test_obs = len(weights)
-            Prescriptions = np.zeros((n_test_obs))
-            m = gp.Model()            
-            m.setParam('OutputFlag', 0)
-
-            # variables
-            offer = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'offer')
-            deviation = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = -gp.GRB.INFINITY)
-            loss = m.addMVar(n_scen, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            t = m.addMVar(1, vtype = gp.GRB.CONTINUOUS, lb = 0, name = 'aux')
-            
-            # constraints
-            m.addConstr(deviation == (target_scen - offer) )
-
-            m.addConstr(loss >= crit_quant*(deviation) )
-            m.addConstr(loss >= -0.5*(deviation) )
-            m.addConstr(loss >= (crit_quant-1)*(deviation + 0.1) )
-            m.setObjective( t, gp.GRB.MINIMIZE)
-            
-            for row in range(len(weights)):
-                c1 = m.addConstr(t >= (weights[row]@loss) + risk_aversion*(deviation@(deviation*weights[row])))
-
-                m.optimize()                
-                m.remove(c1)                
-                Prescriptions[row] = offer.X[0]        
-            return Prescriptions
-        
     elif problem =='mse':
         return (target_scen@weights)
  
@@ -429,96 +191,6 @@ config = params()
 
 results_path = f'{cd}\\results\\synthetic_data'
 data_path = f'{cd}\\data'
-
-#%% 
-
-# # experiment parameters
-# nobs_train = 500
-# nobs_test = 500
-# nobs = nobs_train + nobs_test
-# # fixed term to ensure everything is non-negative
-# # ** Does not affect the results, only to speed up computations with nonnegativity of parameters
-# bias_term = 15
-
-# y_supp = np.arange(-15, 7, 0.1).round(1) + bias_term
-# n_locs = len(y_supp)
-# target_quant = np.arange(0.01, 1, 0.01).round(2)
-
-# alpha_1 = 1.2
-# alpha_2 = 1.2
-# alpha_3 = 4.5
-
-# beta = -1.3
-
-# X0 = np.random.normal(loc = bias_term, scale = 1, size = nobs).round(1)
-# X1 = np.random.normal(size = nobs, scale = 1).round(1)
-# X2 = np.random.normal(size = nobs, scale = 1).round(1)
-# X3 = np.random.normal(size = nobs).round(1)
-# error = np.random.normal(scale = 0.25, size = nobs).round(1)
-
-# P_1 = (alpha_1*X1 + alpha_2*X2).round(1)
-
-# Y = X0 + P_1 + (alpha_3*X3)*((X3) < beta) # + error
-
-# Y = Y.round(2)
-# Y = projection(Y, ub = y_supp.max(), lb = y_supp.min())
-
-# Y_train = Y[:nobs_train]
-# Y_test = Y[nobs_train:]
-
-# plt.hist(Y_train, bins = 50)
-# plt.show()
-
-# ### Expert forecasts for both training and test set
-# # Expert 1: Access to features 1&2
-# p1_hat = np.zeros((nobs, n_locs))
-# F1_hat = np.zeros((nobs, n_locs))
-# Q1_hat = np.zeros((nobs, len(target_quant)))
-
-# for i in range(nobs):
-#     # define probabilistic forecast
-#     f1_hat_temp = norm(loc = X0[i] + alpha_1*X1[i] + alpha_2*X2[i], scale = 0.5)
-        
-#     p1_hat[i] = f1_hat_temp.pdf(y_supp)*0.1
-#     F1_hat[i] = f1_hat_temp.cdf(y_supp)
-#     Q1_hat[i] = f1_hat_temp.ppf(target_quant)
-    
-
-# # Expert 2: Access to feature 3/ calibrated probabilistic forecast **only** on the left tail
-# p2_hat = np.zeros((nobs, n_locs))
-# F2_hat = np.zeros((nobs, n_locs))
-# Q2_hat = np.zeros((nobs, len(target_quant)))
-
-# for i in range(nobs):
-
-#     if X3[i] < beta:           
-#         f2_hat_temp = norm(loc = X0[i] + (X3[i]*alpha_3), scale = 1)
-#     else:
-#         f2_hat_temp = norm(loc = X0[i], scale = 0.5)
-        
-#     p2_hat[i] = f2_hat_temp.pdf(y_supp)*0.1
-#     F2_hat[i] = f2_hat_temp.cdf(y_supp)
-#     Q2_hat[i] = f2_hat_temp.ppf(target_quant)
-
-# # evaluate probabilistic predictions
-
-# pinball_1 = 100*pinball(Q1_hat[:nobs_train], Y_train, target_quant).round(4)
-# pinball_2 = 100*pinball(Q2_hat[:nobs_train], Y_train, target_quant).round(4)
-
-# plt.plot(pinball_1, label = 'Expert 1')
-# plt.plot(pinball_2, label = 'Expert 2')
-# plt.show()
-
-# print('Average Pinball Loss')
-# print(f'Expert 1:{pinball_1.mean()}')
-# print(f'Expert 2:{pinball_2.mean()}')
-
-# for i in range(20):
-#     plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
-#     plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
-#     plt.plot(Y_train[i], 0, 'o')
-#     plt.legend()
-#     plt.show()
 
 #%% Generate synthetic data
 
@@ -616,41 +288,6 @@ print('Pinball loss at critical quantile')
 print(f'Expert 1:{pinball_1[np.where(target_quant == 0.20)[0]]}')
 print(f'Expert 2:{pinball_2[np.where(target_quant == 0.20)[0]]}')
 
-# for i in range(20):
-#     plt.plot(y_supp, p1_hat[i], label = 'Expert 1')
-#     plt.plot(y_supp, p2_hat[i], label = 'Expert 2')
-#     plt.plot(Y_train[i], 0, 'o')
-#     plt.legend()
-#     plt.show()
-
-# Check in-sample performance of each expert for sanity check 
-# print('In-sample performance')
-
-# for j, temp_pdf in enumerate([p1_hat[:nobs_train], p2_hat[:nobs_train]]):
-
-#     temp_prescriptions = solve_opt_prob(y_supp, temp_pdf, 'newsvendor', risk_aversion = 0, crit_quant = 0.2)
-               
-#     # Estimate task-loss for specific model
-#     temp_Decision_cost = 100*task_loss(temp_prescriptions.reshape(-1,1), Y_train, 'newsvendor', crit_quant = 0.2, risk_aversion = 0)
-    
-#     # Evaluate QS (approximation of CRPS) for each model
-#     # find quantile forecasts
-#     temp_q_forecast = np.array([inverted_cdf([0.2], y_supp, temp_pdf[i]) for i in range(nobs_train)])
-#     temp_qs = 100*pinball(temp_q_forecast, Y_train, [0.2]).round(4)
-    
-#     temp_CDF = temp_pdf.cumsum(1)
-#     H_i = 1*np.repeat(y_supp.reshape(1,-1), len(Y_train), axis = 0) >= Y_train.reshape(-1,1)
-    
-#     CRPS = np.square(temp_CDF - H_i).sum(1).mean()
-
-#     print(f'Expert {j+1}')
-#     print('Decision Cost')
-#     print(temp_Decision_cost)
-    
-#     print('CRPS')
-#     print(CRPS.mean().round(4))
-
-
 #%% CRPS learning
 
 train_p_list = [p1_hat[:nobs_train], p2_hat[:nobs_train]]
@@ -714,7 +351,6 @@ for gamma in [0, 0.1, 1]:
 
     print('Weights')
     print(lambda_static_dict[f'DF_{gamma}'])
-
 
 #%% # Inverse Performance-based weights (invW)
 

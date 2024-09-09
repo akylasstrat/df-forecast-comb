@@ -540,9 +540,6 @@ weather_dict = {'VAR78':'tclw', 'VAR79': 'tciw', 'VAR134':'SP', 'VAR157':'rh',
 
 aggr_df = aggr_df.rename(columns = weather_dict)
 
-#aggr_df['diurnal_2'] = np.cos(2*np.pi*(aggr_df.index.hour+1)/24)
-#aggr_df['diurnal_3'] = np.sin(4*np.pi*(aggr_df.index.hour+1)/24)
-#aggr_df['diurnal_4'] = np.cos(4*np.pi*(aggr_df.index.hour+1)/24)
 aggr_df['diurnal'] = np.maximum(np.sin(2*np.pi*(aggr_df.index.hour+3)/24), np.zeros(len(aggr_df)))
 aggr_df['month_cos'] = np.cos(2*np.pi*(aggr_df.index.month+1)/12)
 
@@ -626,33 +623,6 @@ except:
     Decision_cost = pd.DataFrame()
     QS_df = pd.DataFrame()
     mean_QS = pd.DataFrame()
-
-#%% Projection test
-
-# w = torch.FloatTensor([-2, 0.4, 0.5])
-
-# u_sorted, indices = torch.sort(w, descending = True)
-# j_ind = torch.arange(1, w.shape[0] + 1)
-# rho = (u_sorted + (1/j_ind)*(1-torch.cumsum(u_sorted, dim = 0)) > 0).sum().detach().numpy()
-# dual_mu = 1/rho*(1-u_sorted[:rho].sum())
-
-# y_proj = torch.maximum(w + dual_mu, torch.zeros_like(w))
-
-# m = gp.Model()            
-# m.setParam('OutputFlag', 0)
-
-# # variables
-# w_proj = m.addMVar(w.shape[0], vtype = gp.GRB.CONTINUOUS, lb = 0)
-
-# # constraints
-# m.addConstr(w_proj.sum() == 1)
-# m.setObjective( (w_proj - w.detach().numpy())@(w_proj - w.detach().numpy()), gp.GRB.MINIMIZE)
-
-# m.optimize()
-
-# print(f'Original:{w}')
-# print(f'Closed-form:{y_proj}')
-# print(f'Gurobi{w_proj.X}')
 
 #%%
 # Iterate over combinations of problem parameters (for a single power plant)
@@ -912,7 +882,7 @@ for tup in tuple_list[row_counter:]:
     patience = 10
     
     # Iterate over values of hyperparameter \gamma        
-    vfa_model = MLP(input_size = train_X_VFA.shape[1], hidden_sizes = [], output_size = 1, constrain_output = False)    
+    vfa_model = MLP(input_size = train_X_VFA.shape[1], hidden_sizes = [20, 20], output_size = 1, constrain_output = False)    
     optimizer = torch.optim.Adam(vfa_model.parameters(), lr = 1e-2)
     vfa_model.train_model(train_data_loader, valid_data_loader, optimizer, epochs = num_epochs, patience = patience)
     
