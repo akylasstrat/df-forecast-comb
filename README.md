@@ -1,6 +1,8 @@
-# Decision-Focused Probabilistic Forecast Combination
+# Decision-Focused Linear Pooling for Probabilistic Forecast Combination
 
-Code supplement to [Decision-Focused Probabilistic Forecast Combination]() (link for preprint soon).
+
+Code supplement to [Decision-Focused Linear Pooling for Probabilistic
+Forecast Combination](https://hal.science/hal-04593114).
 
 ### Abstract
 
@@ -21,27 +23,28 @@ Notably, optimizing for a combination of downstream cost and a standard scoring 
 
 ### Code organization
 
-- ```plot_results.py```: generates plots and tables.
-- ```main_synthetic_data.py```: runs the synthetic data experiment.
-- ```main_solar_trading.py```: runs the trading experiment with stochastic solar production.
-- ```main_NEW_wind_grid_scheduling.py```: runs the grid scheduling experiment with stochastic wind production.
-- ```torch_layers_functions.py```: includes all implemented pytorch layers.
-- ```optimal_transport_functions.py, optimization_functions.py,``` and ```utility_functions```: auxiliary helper functions.
-- data: pre-processed and cleaned GEFCom2014 data set.
+- ```plot_results.py```: Generates plots and tables.
+- ```main_synthetic_data.py```: Runs the synthetic data experiment.
+- ```main_solar_trading.py```: Runs the trading experiment with stochastic solar production.
+- ```main_NEW_wind_grid_scheduling.py```: Runs the grid scheduling experiment with stochastic wind production.
+- ```torch_layers_functions.py```: Includes all implemented pytorch layers.
+- ```optimal_transport_functions.py, optimization_functions.py,``` and ```utility_functions```: Includes auxiliary helper functions.
+- ```|---data```: Pre-processed GEFCom2014 data set.
 ---
 
 ## Citation
 Please use the following reference:
 
+
 ```@unpublished{stratigakos:hal-04593114,
-  TITLE = {{Decision-Focused Probabilistic Forecast Combination}},
+  TITLE = {{Decision-Focused Linear Pooling for Probabilistic Forecast Combination}},
   AUTHOR = {Stratigakos, Akylas and Pineda, Salvador and Morales, Juan Miguel},
   URL = {https://hal.science/hal-04593114},
   NOTE = {working paper or preprint},
   YEAR = {2024},
-  MONTH = May,
+  MONTH = Sep,
   KEYWORDS = {Probabilistic forecasting ; Forecast combination ; Decision-focused learning ; Prescriptive analytics ; Linear pool ; Differentiable optimization},
-  PDF = {https://hal.science/hal-04593114/file/submitted_Forecast_combination.pdf},
+  PDF = {https://hal.science/hal-04593114v2/file/clean_R1.Decision_Focused_Combination.pdf},
   HAL_ID = {hal-04593114},
-  HAL_VERSION = {v1},
-}
+  HAL_VERSION = {v2},
+}```
