@@ -47,4 +47,4 @@ Please use the following reference:
   PDF = {https://hal.science/hal-04593114v2/file/clean_R1.Decision_Focused_Combination.pdf},
   HAL_ID = {hal-04593114},
   HAL_VERSION = {v2},
-}```
+}
