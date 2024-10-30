@@ -33,7 +33,8 @@ Scripts that run the experiments:
 - ```main_solar_trading.py```: Runs the trading experiment with stochastic solar production.
 - ```main_NEW_wind_grid_scheduling.py```: Runs the grid scheduling experiment with stochastic wind production.
 
-In each script, use ```params``` function to set the design experiments.
+In each script, use ```params``` function to set the design experiments. 
+To store new results, set ```params['save'] = True```.
 For ```main_solar_trading.py```, run the experiment seperately for each target solar plant, controlled from ```params['target_zone']```.
 
 Other scripts:
@@ -41,9 +42,10 @@ Other scripts:
 - ```torch_layers_functions.py```: Includes all implemented pytorch layers.
 - ```utility_functions```: Includes auxiliary helper functions.
 
-Data and required packages:
+Input/ output data and required packages:
 - ```\data```: Solar and wind data from the [Global Energy Forecasting competition (GEFCom2014)](https://www.sciencedirect.com/science/article/pii/S0169207016000133?via=ihub#s000140), inculded here for convenience.
 - ```\data\pglib-opf-cases```: IEEE matpower cases from [Power Grid Lib - Optimal Power Flow](https://github.com/power-grid-lib/pglib-opf), included here for convenience.
+- ```\results```: Stores results and trained models for each experiment.
 - ```requirements.txt```: Required packages and libraries. 
 ---
 

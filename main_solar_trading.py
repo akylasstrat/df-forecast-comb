@@ -495,9 +495,9 @@ def params():
     params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2) # Critical quantile, each value runs a different experiment
     params['risk_aversion'] = [0.2] # Trading risk-aversion// Do not change
 
-    params['save'] = True # If True, then saves trained models and results
+    params['save'] = False # If True, then saves trained models and results
     params['train_static'] = True # If True, then trains static combination models
-    params['train_adaptive'] = False # If True, then trains adaptive combination models
+    params['train_adaptive'] = True # If True, then trains adaptive combination models
     
     return params
 
