@@ -43,8 +43,9 @@ Other scripts:
 - ```utility_functions.py```: Includes auxiliary functions.
 
 Input/ output data and required packages:
-- ```\data```: Solar and wind data from the [Global Energy Forecasting competition (GEFCom2014)](https://www.sciencedirect.com/science/article/pii/S0169207016000133?via=ihub#s000140), inculded here for convenience.
-- ```\data\pglib-opf-cases```: IEEE matpower cases from [Power Grid Lib - Optimal Power Flow](https://github.com/power-grid-lib/pglib-opf), included here for convenience.
+- ```\data```: Solar and wind data from the [Global Energy Forecasting competition (GEFCom2014)](https://www.sciencedirect.com/science/article/pii/S0169207016000133?via=ihub#s000140), 
+concatenated in a single file.
+- ```\data\pglib-opf-cases```: IEEE matpower cases from [Power Grid Lib - Optimal Power Flow](https://github.com/power-grid-lib/pglib-opf) available under a [Creative Commons Attribution License](https://creativecommons.org/licenses/by/4.0/), reproduced for convenience.
 - ```\results```: Stores results and trained models for each experiment.
 - ```requirements.txt```: Required packages and libraries.
 ---
