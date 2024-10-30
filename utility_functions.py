@@ -17,6 +17,65 @@ plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = 'Times New Roman'
 plt.rcParams["mathtext.fontset"] = 'dejavuserif'
 
+###### Auxiliarry functions for CDFs
+
+def discrete_cdf(target_vals, x_observations, w = []):
+    ''' Estimates the CDF from weighted discrete distribution
+        target_vals: array to evaluate, 
+        x_observations: discrete observations, 
+        w: observation weights, if == [], then set to uniform, 
+        
+        Returns the probability of x_observations <= target_vals'''
+        
+    if len(w) == 0:
+        # dirac distribution 
+        w = np.ones(len(x_observations))*(1/len(x_observations))
+    
+    ind_sort = np.argsort(x_observations)
+    x_sort = x_observations.copy()[ind_sort]
+    w_sort = w[ind_sort]
+    
+    prob_vals = np.zeros(len(target_vals))
+    for i, t in enumerate(target_vals):
+        if t <= x_sort.min():
+            prob_vals[i] = 0
+        else:
+            # estimate cdf: F(t) = Prob(X<=t)
+            prob_vals[i] = w_sort.cumsum()[np.where(x_sort<=t)[0][-1]]
+
+    return prob_vals
+
+def inverted_cdf(target_probs, x_observations, w = []):
+    ''' Inverted CDF from weighted discrete distribution
+        target_probs: array with values to evaluate probabilities/quantiles/percentiles, 
+        x_observations: discrete observations/ support of distribution/ locations, 
+        w: observation weights, if == [], then set to uniform, 
+        
+        Returns the probability of x_observations <= target_vals'''
+        
+    if len(w) == 0:
+        # dirac distribution 
+        w = np.ones(len(x_observations))*(1/len(x_observations))
+    
+    ind_sort = np.argsort(x_observations.reshape(-1))
+    x_sort = x_observations.copy()[ind_sort]
+    w_sort = w[ind_sort]
+    
+    x_vals = np.zeros(len(target_probs))
+    for i, prob in enumerate(target_probs):        
+        if prob == 0:
+            # return min value
+            x_vals[i] = x_observations.min()
+        elif (prob == 1)or((w_sort.cumsum() < prob).all()):
+            # return max value
+            x_vals[i] = x_observations.max()
+        else:
+            # inv cdf: Q(prob) = inf{x: F(x) >= prob}                
+            q1 = x_sort[np.where(w_sort.cumsum() >= prob)[0][0]]
+            x_vals[i] = q1
+    return x_vals
+
+
 def cart_find_weights(trainX, testX, cart_model):
     ''' Find weights for a sklearn forest model '''    
     Leaf_nodes = cart_model.apply(trainX).reshape(-1,1) # nObs*nTrees: a_ij shows the leaf node for observation i in tree j

@@ -16,12 +16,9 @@ cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 
 from utility_functions import *
-from optimal_transport_functions import *
+# from optimal_transport_functions import *
 from torch_layers_functions import *
 from torch.utils.data import Dataset, DataLoader
-import torch
-from torch_layers_functions import *
-
 from scipy.stats import norm
 
 # IEEE plot parameters (not sure about mathfont)
@@ -175,7 +172,7 @@ def params():
     ''' Set up the experiment parameters'''
 
     params = {}
-    params['save'] = True # If True, then saves models and results
+    params['save'] = False # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad, pwl}
@@ -187,13 +184,12 @@ def params():
 #%%
    
 config = params()
-# GD_hparam = GD_params()
 
+# Directory path
 results_path = f'{cd}\\results\\synthetic_data'
 data_path = f'{cd}\\data'
 
 #%% Generate synthetic data
-
 
 np.random.seed(0)
 
@@ -204,7 +200,6 @@ nobs = nobs_train + nobs_test
 critical_fractile = config['crit_quant']
 
 print(f'Newsvendor problem with critical quantile:{critical_fractile}')
-
 print('Generate synthetic data')
 # fixed term to ensure everything is non-negative
 # ** Does not affect the results, only to speed up computations with nonnegativity of parameters
@@ -320,7 +315,6 @@ print(f'CRPSL weights:{lambda_crps}')
 
 lambda_static_dict['CRPS'] = lambda_crps
 #%% Decision-focused learning
-from torch_layers_functions import *
 
 # optimization problem parameters
 critical_fractile = 0.2

@@ -1,8 +1,13 @@
 # Decision-Focused Linear Pooling for Probabilistic Forecast Combination
 
+This repository contains the code to recreate the experiments of 
 
-Code supplement to [Decision-Focused Linear Pooling for Probabilistic
-Forecast Combination](https://hal.science/hal-04593114).
+```
+@unpublished{stratigakos:hal-04593114,
+TITLE = {{Decision-Focused Linear Pooling for Probabilistic Forecast Combination}}, AUTHOR = {Stratigakos, Akylas and Pineda, Salvador and Morales, Juan Miguel},  URL = {https://hal.science/hal-04593114}, NOTE = {working paper or preprint}, YEAR = {2024},  MONTH = Sep}
+```
+
+which is available [here](https://hal.science/hal-04593114).
 
 ### Abstract
 
@@ -23,28 +28,32 @@ Notably, optimizing for a combination of downstream cost and a standard scoring 
 
 ### Code organization
 
-- ```plot_results.py```: Generates plots and tables.
+Scripts that run the experiments:
 - ```main_synthetic_data.py```: Runs the synthetic data experiment.
 - ```main_solar_trading.py```: Runs the trading experiment with stochastic solar production.
 - ```main_NEW_wind_grid_scheduling.py```: Runs the grid scheduling experiment with stochastic wind production.
+
+In each script, use ```params``` function to set the design experiments.
+For ```main_solar_trading.py```, run the experiment seperately for each target solar plant, controlled from ```params['target_zone']```.
+
+Other scripts:
+- ```plot_results.py```: Generates Tables 1-3 and Figure 2.
 - ```torch_layers_functions.py```: Includes all implemented pytorch layers.
-- ```optimal_transport_functions.py, optimization_functions.py,``` and ```utility_functions```: Includes auxiliary helper functions.
-- ```|---data```: Pre-processed GEFCom2014 data set.
+- ```utility_functions```: Includes auxiliary helper functions.
+
+Data and required packages:
+- ```\data```: Solar and wind data from the [Global Energy Forecasting competition (GEFCom2014)](https://www.sciencedirect.com/science/article/pii/S0169207016000133?via=ihub#s000140), inculded here for convenience.
+- ```\data\pglib-opf-cases```: IEEE matpower cases from [Power Grid Lib - Optimal Power Flow](https://github.com/power-grid-lib/pglib-opf), included here for convenience.
+- ```requirements.txt```: Required packages and libraries. 
 ---
 
-## Citation
-Please use the following reference:
+### Set-up
+
+This code has been developed using ```Python``` version ```3.9.18```. To install the necessary packages, create a virtual enviroment and run ```pip install -r requirements.txt```. 
+For inquiries, contact ```a.stratigakos@imperial.ac.uk```.
+
+### Citation
+Please use the reference provided above.
 
 
-```@unpublished{stratigakos:hal-04593114,
-  TITLE = {{Decision-Focused Linear Pooling for Probabilistic Forecast Combination}},
-  AUTHOR = {Stratigakos, Akylas and Pineda, Salvador and Morales, Juan Miguel},
-  URL = {https://hal.science/hal-04593114},
-  NOTE = {working paper or preprint},
-  YEAR = {2024},
-  MONTH = Sep,
-  KEYWORDS = {Probabilistic forecasting ; Forecast combination ; Decision-focused learning ; Prescriptive analytics ; Linear pool ; Differentiable optimization},
-  PDF = {https://hal.science/hal-04593114v2/file/clean_R1.Decision_Focused_Combination.pdf},
-  HAL_ID = {hal-04593114},
-  HAL_VERSION = {v2},
-}
+

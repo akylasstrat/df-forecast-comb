@@ -28,7 +28,7 @@ sys.path.append(cd)
 from sklearn.preprocessing import MinMaxScaler
 
 from utility_functions import *
-from optimal_transport_functions import *
+# from optimal_transport_functions import *
 from torch_layers_functions import *
 from torch.utils.data import Dataset, DataLoader
 import torch
@@ -487,17 +487,17 @@ def params():
     params['end_date'] = '2014-07-01'
     
     # Experimental setup parameters
-    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}
+    params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}// Do not change
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [3] # select solar plant from GEFCom2014 data set
+    params['target_zone'] = [2] # Select solar plant from GEFCom2014 data [Z1, Z2, Z3]
     
     # Problem parameters        
-    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2)
-    params['risk_aversion'] = [0.2]
+    params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2) # Critical quantile, each value runs a different experiment
+    params['risk_aversion'] = [0.2] # Trading risk-aversion// Do not change
 
-    params['save'] = True # If True, then saves models and results
-    params['train_static'] = True
-    params['train_adaptive'] = False
+    params['save'] = True # If True, then saves trained models and results
+    params['train_static'] = True # If True, then trains static combination models
+    params['train_adaptive'] = False # If True, then trains adaptive combination models
     
     return params
 
@@ -752,7 +752,7 @@ for tup in tuple_list[row_counter:]:
         # Estimate task-loss for specific model
         temp_decision_cost = 100*task_loss(temp_prescriptions, comb_trainY.values, target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
 
-        print(f'Model:OLP')        
+        print('Model:OLP')        
         print(f'Task loss:{temp_decision_cost}')        
 
 
@@ -877,9 +877,7 @@ for tup in tuple_list[row_counter:]:
     lambda_static_dict['CRPS'] = lpool_crps_model.get_weights()
 
     #%
-    ##### Decision-focused learning combination for different values of gamma  
-    from torch_layers_functions import *
-     
+    ##### Decision-focused learning combination for different values of gamma       
     train_data_loader_full = create_data_loader(tensor_train_p_list_full + [tensor_trainY_full], batch_size = 512, shuffle= False)    
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = 512, shuffle= False)
     valid_data_loader = create_data_loader(tensor_valid_p_list + [tensor_validY], batch_size = 512, shuffle= False)
@@ -994,9 +992,7 @@ for tup in tuple_list[row_counter:]:
                 pickle.dump(adaptive_models_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
         
         #%
-        ### Decision-focused Learning - Linear Regression + MLP models over all values of gamma
-        from torch_layers_functions import *
-        
+        ### Decision-focused Learning - Linear Regression + MLP models over all values of gamma        
         for gamma in config['gamma_list']:
             
             torch.manual_seed(0)        

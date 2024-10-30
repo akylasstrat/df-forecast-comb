@@ -18,20 +18,18 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.model_selection import GridSearchCV
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.tree import DecisionTreeRegressor
+from sklearn.preprocessing import MinMaxScaler
 from matpowercaseframes import CaseFrames
-
 
 cd = os.path.dirname(__file__)  #Current directory
 sys.path.append(cd)
 
-from gurobi_ml import add_predictor_constr
-from sklearn.preprocessing import MinMaxScaler
+# from gurobi_ml import add_predictor_constr
 
 from utility_functions import *
-from optimal_transport_functions import *
+# from optimal_transport_functions import *
 from torch_layers_functions import *
 from torch.utils.data import Dataset, DataLoader
-import torch
 
 # IEEE plot parameters (not sure about mathfont)
 plt.rcParams['figure.constrained_layout.use'] = True
@@ -420,7 +418,7 @@ def grid_dict(path, save = False):
 def load_grid_data(case_name, pglib_path):
     case_name_prefix = case_name.split('.')[0]    
     #matgrid = CaseFrames(pglib_path + case)
-    grid = grid_dict(pglib_path + case_name)
+    grid = grid_dict(pglib_path + '\\'+ case_name)
     
     print(case_name_prefix)
     
@@ -462,6 +460,36 @@ def gd_params():
     gd_params['feasibility_method'] = 'softmax'
     return gd_params
 
+### Dictionaries to store wind data for pglib-opf-cases
+# Wind capacity
+w_cap_dict = {'pglib_opf_case14_ieee.m': 100,
+ 'pglib_opf_case57_ieee.m': 600,
+ 'pglib_opf_case118_ieee.m': 500,
+ 'pglib_opf_case24_ieee_rts.m': 1000,
+ 'pglib_opf_case39_epri.m': 1500,
+ 'pglib_opf_case73_ieee_rts.m': 1000}
+
+# Bus index of wind farm in the grid
+w_bus_dict = {'pglib_opf_case14_ieee.m': 13,
+ 'pglib_opf_case57_ieee.m': 37,
+ 'pglib_opf_case118_ieee.m': 36,
+ 'pglib_opf_case24_ieee_rts.m': 14,
+ 'pglib_opf_case39_epri.m': 5,
+ 'pglib_opf_case73_ieee_rts.m': 40}
+
+IEEE_Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
+         'pglib_opf_case24_ieee_rts.m', 'pglib_opf_case39_epri.m', 'pglib_opf_case73_ieee_rts.m']
+
+# w_bus = [13, 37, 36, 14, 5, 40]
+# w_bus_dict = {}
+
+# w_cap = [100, 600, 500, 1000, 1500, 1000]
+# w_cap_dict = {}
+
+# for i, case in enumerate(Cases):
+#     w_bus_dict[case] = w_bus[i]
+#     w_cap_dict[case] = w_cap[i]
+
 def params():
     ''' Set up the experiment parameters'''
 
@@ -482,14 +510,15 @@ def params():
     params['dataset'] = 'wind' # !!! Do not change
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1] # !!! Do not change
-    params['target_ieee_case'] = 1
+    params['target_ieee_case'] = 'pglib_opf_case14_ieee.m'
     
     params['train_static'] = True
     
     return params
 
 
-#%%
+#%% Set up experiment parameters
+
 config = params()
 hyperparam = tree_params()
 nn_hparam = gd_params()
@@ -497,25 +526,11 @@ nn_hparam = gd_params()
 # results_path = f'{cd}\\results\\grid_scheduling'
 results_path = f'{cd}\\results\\grid_scheduling'
 data_path = f'{cd}\\data'
-pglib_path =  'C:/Users/astratig/pglib-opf/'
+pglib_case_path =  f'{cd}\\data\\pglib-opf-cases' 
 
-# load grid data
-Cases = ['pglib_opf_case14_ieee.m', 'pglib_opf_case57_ieee.m', 'pglib_opf_case118_ieee.m', 
-         'pglib_opf_case24_ieee_rts.m', 'pglib_opf_case39_epri.m', 'pglib_opf_case73_ieee_rts.m']
-
-w_bus = [13, 37, 36, 14, 5, 40]
-w_bus_dict = {}
-
-w_cap = [100, 600, 500, 1000, 1500, 1000]
-w_cap_dict = {}
-
-for i, case in enumerate(Cases):
-    w_bus_dict[case] = w_bus[i]
-    w_cap_dict[case] = w_cap[i]
-
-target_case = Cases[config['target_ieee_case']]
-grid = load_grid_data(target_case, pglib_path)
-#%% Set up experiment parameters
+# Load IEEE grid data
+target_case = config['target_ieee_case']
+grid = load_grid_data(target_case, pglib_case_path)
 
 zone_target = config['target_zone']
 print(f'Target zone:{zone_target}')
@@ -524,7 +539,7 @@ step = .01
 y_supp = np.arange(0, 1+step, step).round(2)
 nlocations = len(y_supp)
 
-## Update system parameters
+## Update System parameters according to experiment
 grid['Pd'] = np.array( grid['w_capacity'] + 100)
 grid['Pmax'] = (grid['Pmax']/grid['Pmax'].sum())*(np.array( grid['w_capacity'] + 150))
 
@@ -555,16 +570,13 @@ config['end_date'] = '2014-01-01'
 
 aggr_df = pd.read_csv(f'{data_path}\\GEFCom2014-processed.csv', index_col = 0, header = [0,1])
     
-
 target_problem = config['problem']
-expert_zone = ['Z7', 'Z8', 'Z9']
 risk_aversion = config['risk_aversion']
 
 tuple_list = [tup for tup in itertools.product(zone_target, config['risk_aversion'])]
 
 # keep only relevant data
 zone_df = aggr_df.copy()['Z1']
-
 feat_scaler = MinMaxScaler()
 
 ### Create train/test sets for all series
@@ -572,6 +584,7 @@ trainY = zone_df['POWER'][config['start_date']:config['split_date_prob']].round(
 comb_trainY = zone_df['POWER'][config['split_date_prob']:config['split_date_comb']].round(2)
 testY = zone_df['POWER'][config['split_date_comb']:].round(2)
 
+# Expert zone: We use the respective NWP forecasts from each zone as features to predict the target zone (Z1)
 expert_zones = ['Z2', 'Z3', 'Z4']
 
 trainX_v1 = aggr_df[expert_zones[0]][['wspeed10', 'wdir10_rad', 'wspeed100', 'wdir100_rad']][config['start_date']:config['split_date_prob']]
@@ -798,7 +811,6 @@ for tup in tuple_list[row_counter:]:
     
     
     ##### Decision-focused combination for different values of gamma     
-    from torch_layers_functions import * 
     patience = 5
     
     train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY, tensor_train_oracle_DAcost], batch_size = 100, shuffle = False)
