@@ -628,7 +628,7 @@ for tup in tuple_list[row_counter:]:
 
     if row_counter == 0:        
         #### Train different probabilistic forecasting models/ only train for first iteration    
-    
+        print('Train prob. forecasting models')
         # store predictions
         train_w_dict = {}
         test_w_dict = {}
@@ -690,7 +690,7 @@ for tup in tuple_list[row_counter:]:
                 test_p_list.append(wemp_to_support(test_w_dict[learner], trainY.values, y_supp))
 
         # estimate CRPS
-        print('CRPS')
+        print('Evaluate in-sample CRPS')
         for j, m in enumerate(all_learners): 
             temp_CDF = test_p_list[j].cumsum(1)
             H_i = 1*np.repeat(y_supp.reshape(1,-1), len(testY), axis = 0)>=testY.values.reshape(-1,1)
@@ -700,7 +700,8 @@ for tup in tuple_list[row_counter:]:
             print(f'{m}:{CRPS}')
         
         # estimate QS
-        print('QS')
+        # print('QS')
+        print('Generate Figure 3')
         target_quant = np.arange(.01, 1, .01)
         for j,m in enumerate(all_learners):
             temp_pdf = test_p_list[j]
@@ -711,7 +712,6 @@ for tup in tuple_list[row_counter:]:
             plt.plot(temp_qs, label = m)
         plt.ylabel('Quantile Score')
         plt.xlabel('Quantile')
-        
         plt.legend(['$k$$\mathtt{NN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'])
         plt.xticks(np.arange(10, 100, 10), np.arange(0.1, 1, .1).round(2))
         # if dataset == 'wind':
@@ -722,6 +722,7 @@ for tup in tuple_list[row_counter:]:
         #% Visualize some prob. forecasts for sanity check
         #%
         # step 1: find inverted CDFs
+        print('Visualize prob. forecasts for sanity check')
         F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY.values, train_w_dict[learner][i]) for i in range(500)]) 
                  for j,learner in enumerate(all_learners)]
         
@@ -730,6 +731,9 @@ for tup in tuple_list[row_counter:]:
             #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
             plt.fill_between(np.arange(50), F_inv[i][200:250,0], F_inv[i][200:250,-1], alpha = .3, label = learner)
         plt.legend()
+        plt.xlabel('Timesteps')
+        plt.ylabel('p.u.')
+        plt.title('Prob. Forecast Example')
         plt.show()
         
         N_experts = len(all_learners)

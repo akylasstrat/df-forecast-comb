@@ -231,9 +231,9 @@ Y = projection(Y, ub = y_supp.max(), lb = y_supp.min())
 Y_train = Y[:nobs_train]
 Y_test = Y[nobs_train:]
 
-# Visualize data
-plt.hist(Y_train, bins = 50)
-plt.show()
+# # Visualize data
+# plt.hist(Y_train, bins = 50)
+# plt.show()
 
 ### Expert forecasts for both training and test set
 # Expert 1: Access to features 1&2
@@ -271,8 +271,12 @@ for i in range(nobs):
 pinball_1 = 100*pinball(Q1_hat[:nobs_train], Y_train, target_quant).round(4)
 pinball_2 = 100*pinball(Q2_hat[:nobs_train], Y_train, target_quant).round(4)
 
+# Plot quantile score for sanity check
 plt.plot(pinball_1, label = 'Expert 1')
 plt.plot(pinball_2, label = 'Expert 2')
+plt.title('Prob. Forecast Quality')
+plt.xlabel('Quantile')
+plt.ylabel('Quantile Score')
 plt.show()
 
 print('Average Pinball Loss')
@@ -329,6 +333,7 @@ patience = 5
 train_data_loader = create_data_loader(tensor_train_p_list + [tensor_trainY], batch_size = batch_size, shuffle = False)
 
 # iterate over values of gamma (CRPS regularization)
+print('Learn Decision-focused static combinations')
 for gamma in [0, 0.1, 1]:
     
     lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -343,8 +348,8 @@ for gamma in [0, 0.1, 1]:
     
     lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.get_weights()
 
-    print('Weights')
-    print(lambda_static_dict[f'DF_{gamma}'])
+    # print('Weights')
+    # print(lambda_static_dict[f'DF_{gamma}'])
 
 #%% # Inverse Performance-based weights (invW)
 
@@ -426,6 +431,8 @@ for j, m in enumerate(all_models):
     
     print('CRPS')
     print(temp_mean_QS[m].mean().round(4))
+
+print('Aggregate results')
 
 print('Decision Cost')
 print(temp_Decision_cost[all_models].mean().round(4))

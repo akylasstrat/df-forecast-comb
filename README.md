@@ -53,6 +53,7 @@ concatenated in a single file.
 ### Set-up
 
 This code has been developed using ```Python```, version ```3.9.18```. To install the necessary packages, create a virtual enviroment and run ```pip install -r requirements.txt```.
+The package ```gurobipy``` requires installing and having an active license for the [GUROBI](https://www.gurobi.com/academia/academic-program-and-licenses/) solver.
 
 Contact details: ```a.stratigakos@imperial.ac.uk```.
 

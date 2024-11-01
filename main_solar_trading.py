@@ -609,6 +609,7 @@ learning_rate = gd_hparam['learning_rate']
 row_counter = 0
 
 try:
+    # Load and update existing results
     Decision_cost = pd.read_csv(f'{results_path}\\{filename_prefix}_Decision_cost.csv', index_col = 0)
     QS_df = pd.read_csv(f'{results_path}\\{filename_prefix}_QS.csv', index_col = 0)
     mean_QS = pd.read_csv(f'{results_path}\\{filename_prefix}_mean_QS.csv', index_col = 0)
@@ -623,7 +624,7 @@ for tup in tuple_list[row_counter:]:
     target_zone = tup[0]    
     critical_fractile = tup[1]
     risk_aversion = tup[2]
-        
+    
     print(f'Quantile:{critical_fractile}, zone:{target_zone}')
     
     np.random.seed(1234)
@@ -631,13 +632,14 @@ for tup in tuple_list[row_counter:]:
     if row_counter == 0:        
         
         ###### Train expert forecasting models, derive component forecasts (only required for the first iteration)
-    
+        print('Train prob. forecasting models and generate out-of-sample forecasts (only required in first iteration)')
         # store predictions
         train_w_dict = {}
         test_w_dict = {}
         probabilistic_models = {}
 
         ## kNN
+        print('Training kNN')
         parameters = {'n_neighbors':[5, 10, 50, 100]}
         
         # cross-validation for hyperparamter tuning and model training
@@ -657,6 +659,7 @@ for tup in tuple_list[row_counter:]:
         probabilistic_models['knn'] = knn_model_cv.best_estimator_
 
         # CART 2: date predictors
+        print('Training CART')
         
         cart_parameters = {'max_depth':[5, 10, 50, 100], 'min_samples_leaf':[1, 2, 5, 10]}
         cart_model_cv = GridSearchCV(DecisionTreeRegressor(), cart_parameters)
@@ -679,6 +682,7 @@ for tup in tuple_list[row_counter:]:
         test_w_dict['cart_date'] = cart_find_weights(trainX_cart2, testX_cart2, cart_model)
         
         # Random Forest
+        print('Training RF')
     
         rf_parameters = {'min_samples_leaf':[2, 5, 10],'n_estimators':[50], 
                       'max_features':[1, 2, 4, len(trainX_weather.columns)]}
@@ -719,7 +723,7 @@ for tup in tuple_list[row_counter:]:
         
         
         # In-sample performance estimate CRPS
-        print('CRPS')
+        print('Evaluate in-sample CRPS')
         for j, m in enumerate(all_learners): 
             
             temp_CDF = train_p_list[j].cumsum(1)
@@ -734,8 +738,9 @@ for tup in tuple_list[row_counter:]:
         
         CRPS = np.square(temp_CDF - H_i).mean()
         print(f'OLP:{CRPS}')
+        
         #% In-sample task loss performance     
-        print('In-sample task loss')
+        print('Evaluate in-sample task loss')
         for j, m in enumerate(all_learners):
             # Combine PDFs for each observation
             temp_prescriptions = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, crit_quant = critical_fractile)
@@ -757,15 +762,14 @@ for tup in tuple_list[row_counter:]:
 
 
         #
-        # Evaluate probabilistic forecast using Quantile Score 
-        print('QS')
+        # Evaluate probabilistic forecast using Quantile Score, generate Figure 1
+        print('Evaluate out-of-sample Quantile Score and generate Figure 1')
         target_quant = np.arange(.01, 1, .01)
         for j,m in enumerate(all_learners):
             temp_pdf = test_p_list[j]
     
             temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
             temp_qs = 100*pinball(temp_q_forecast, testY.values, target_quant).round(4)
-            print(m)
             plt.plot(temp_qs, label = m)
         #plt.plot(100*pinball(test_q_pred, testY[target_zone].values, target_quant).round(4), label = 'QR reg')
         plt.legend(['$k$$\mathtt{NN}$', '$\mathtt{CART}$', '$\mathtt{RF}$'])
@@ -777,6 +781,8 @@ for tup in tuple_list[row_counter:]:
         #%
         #% Visualize some prob. forecasts for sanity check
         #%
+        print('Visualize prob. forecasts for sanity check')
+
         # step 1: find inverted CDFs
         F_inv = [np.array([inverted_cdf([.05, .10, .90, .95] , trainY.values, train_w_dict[learner][i]) for i in range(500)]) 
                  for j,learner in enumerate(all_learners)]
@@ -786,10 +792,15 @@ for tup in tuple_list[row_counter:]:
             #plt.fill_between(np.arange(100), F_inv[i][200:300,0], F_inv[i][200:300,-1], alpha = .3, color = 'red')
             plt.fill_between(np.arange(50), F_inv[i][200:250,0], F_inv[i][200:250,-1], alpha = .3, label = learner)
         plt.legend()
+        plt.ylabel('p.u.')
+        plt.xlabel('Timesteps')
+        plt.title('Prob. Forecasts Example')
         plt.show()
         
 
         N_experts = len(all_learners)
+    
+    print('Learn Static Combinations')
     #% ########### Static combinations 
     train_targetY = comb_trainY.values.reshape(-1)
     
@@ -821,7 +832,7 @@ for tup in tuple_list[row_counter:]:
     trainZopt = np.zeros((n_train_obs, len(train_p_list)))
     testZopt = np.zeros((n_test_obs, len(test_p_list)))
         
-    print('Finding optimal decisions in training set')
+    # print('Finding optimal decisions in training set')
     for j in range(N_experts):
         temp_z_opt = solve_opt_prob(y_supp, train_p_list[j], target_problem, risk_aversion = risk_aversion, 
                                     crit_quant = critical_fractile)
@@ -886,6 +897,7 @@ for tup in tuple_list[row_counter:]:
     patience = 5
     
     # Iterate over values of hyperparameter \gamma
+    print('Learn decision-focused static combinations')
     for gamma in config['gamma_list']:
         
         lpool_newsv_model = LinearPoolNewsvendorLayer(num_inputs=N_experts, support = torch.FloatTensor(y_supp),
@@ -900,16 +912,13 @@ for tup in tuple_list[row_counter:]:
         
         lambda_static_dict[f'DF_{gamma}'] = lpool_newsv_model.get_weights()
 
-        print('Weights')
-        print(lambda_static_dict[f'DF_{gamma}'])
-        # if apply_softmax:
-        #     lambda_static_dict[f'DF_{gamma}'] = to_np(torch.nn.functional.softmax(lpool_newsv_model.weights))
-        # else:
-        #     lambda_static_dict[f'DF_{gamma}'] = to_np(lpool_newsv_model.weights)
-#%
+        # print('Weights')
+        # print(lambda_static_dict[f'DF_{gamma}'])
+
     for m in list(lambda_static_dict.keys())[N_experts:]:
         plt.plot(lambda_static_dict[m], label = m)
     plt.legend()
+    plt.title('Static Combination Weights')
     plt.show()
     
     # save static combination weights as dataframe
@@ -940,6 +949,8 @@ for tup in tuple_list[row_counter:]:
     ####### Train Conditional/Adaptive Combination models
 
     if config['train_adaptive'] == True:
+        
+        print('Learn Conditional Combination Models')
         ### CRPS Learning - Linear Regression
         torch.manual_seed(0)
         lr_lpool_crps_model = AdaptiveLinearPoolCRPSLayer(input_size = tensor_trainX.shape[1], hidden_sizes = [], output_size = N_experts, 
@@ -1028,7 +1039,6 @@ for tup in tuple_list[row_counter:]:
             adaptive_models_dict = pickle.load(handle)
             
     #% Performance evaluation
-
     static_models = list(lambda_static_dict) 
     adaptive_models = list(adaptive_models_dict.keys())
     all_models = static_models + adaptive_models
@@ -1050,7 +1060,7 @@ for tup in tuple_list[row_counter:]:
     target_quant = np.arange(0.1, 1, 0.1).round(2)
     print('Estimating out-of-sample performance...')
     for j, m in enumerate(all_models):
-        print(m)
+        print(f'Model:{m}')
         if m in static_models:                
             # Combine PDFs for each observation
             temp_pdf = sum([lambda_static_dict[m][j]*test_p_list[j] for j in range(N_experts)])            
@@ -1064,18 +1074,15 @@ for tup in tuple_list[row_counter:]:
                                             crit_quant = critical_fractile)
            
         Prescriptions[m] = temp_prescriptions
-        print(m)
             
         # Estimate task-loss for specific model
         temp_Decision_cost[m] = 100*task_loss(Prescriptions[m].values, testY.values, 
                                           target_problem, crit_quant = critical_fractile, risk_aversion = risk_aversion)
 
-        print(m)        
         # Evaluate Quantile Score and CRPS for combined forecasts
         # find quantile forecasts
         temp_q_forecast = np.array([inverted_cdf(target_quant, y_supp, temp_pdf[i]) for i in range(n_test_obs)])            
         temp_qs = 100*pinball(temp_q_forecast, testY.values, target_quant).round(4)
-        print(m)
 
         temp_QS[m] = [temp_qs]
         
@@ -1085,10 +1092,10 @@ for tup in tuple_list[row_counter:]:
         CRPS = 100*np.square(temp_CDF - H_i).mean()            
         temp_mean_QS[m] = CRPS
 
-    print('Decision Cost')
+    print('Out-of-sample Decision Cost')
     print(temp_Decision_cost[all_models].mean().round(4))
 
-    print('CRPS')
+    print('Out-of-sample CRPS')
     print(temp_mean_QS[all_models].mean().round(4))
     
     # save results
