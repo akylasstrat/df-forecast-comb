@@ -499,9 +499,6 @@ def params():
     params['split_date_prob'] = '2013-01-01' # Defines train/test split
     params['split_date_comb'] = '2013-07-01' # Defines train/test split
     params['end_date'] = '2014-01-01'
-
-    
-    params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'sched' # {mse, newsvendor, cvar, reg_trad, pwl}
@@ -511,7 +508,8 @@ def params():
     params['gamma_list'] = [0, 0.1, 1]
     params['target_zone'] = [1] # !!! Do not change
     params['target_ieee_case'] = 'pglib_opf_case14_ieee.m'
-    
+
+    params['save'] = True # If True, then saves models and results    
     params['train_static'] = True
     
     return params

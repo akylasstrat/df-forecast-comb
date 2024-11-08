@@ -172,7 +172,7 @@ def params():
     ''' Set up the experiment parameters'''
 
     params = {}
-    params['save'] = False # If True, then saves models and results
+    params['save'] = True # If True, then saves models and results
     
     # Experimental setup parameters
     params['problem'] = 'newsvendor' # {mse, newsvendor, cvar, reg_trad, pwl}

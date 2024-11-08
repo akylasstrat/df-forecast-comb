@@ -489,13 +489,13 @@ def params():
     # Experimental setup parameters
     params['problem'] = 'reg_trad' # {mse, newsvendor, cvar, reg_trad, pwl}// Do not change
     params['gamma_list'] = [0, 0.1, 1]
-    params['target_zone'] = [2] # Select solar plant from GEFCom2014 data [Z1, Z2, Z3]
+    params['target_zone'] = [2] # [1,2,3] This variable selects the respective solar plant from the GEFCom2014 data [Z1, Z2, Z3]
     
     # Problem parameters        
     params['crit_quant'] = np.arange(0.1, 1, 0.1).round(2) # Critical quantile, each value runs a different experiment
     params['risk_aversion'] = [0.2] # Trading risk-aversion// Do not change
 
-    params['save'] = False # If True, then saves trained models and results
+    params['save'] = True # If True, then saves trained models and results
     params['train_static'] = True # If True, then trains static combination models
     params['train_adaptive'] = True # If True, then trains adaptive combination models
     
