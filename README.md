@@ -44,7 +44,7 @@ concatenated in a single file.
 - ```\data\pglib-opf-cases```: IEEE matpower cases from [Power Grid Lib - Optimal Power Flow](https://github.com/power-grid-lib/pglib-opf) available under a [Creative Commons Attribution License](https://creativecommons.org/licenses/by/4.0/), reproduced for convenience.
 - ```\results```: Stores results and trained models for each experiment.
 - ```\plots```: Stores plotted figures (includes additional figures that do not appear in the published paper).
-- ```requirements.txt```: Required packages and libraries.
+- ```resolved_requirements.txt```: Required packages and libraries.
 ---
 
 ### Reproducing the Results
@@ -62,8 +62,9 @@ A few clarifying points:
 
 ### Set-up
 
-This code has been developed using ```Python```, version ```3.9.18```. To install the necessary packages, create a virtual enviroment and run ```pip install -r requirements.txt```.
-The package ```gurobipy``` requires installation and an active license for the [GUROBI](https://www.gurobi.com/academia/academic-program-and-licenses/) solver.
+This code has been developed using ```Python```, version ```3.10.15```. To install the necessary packages, create a virtual environment using the ```conda create -n ENV_NAME python=3.10 ipython```, where ```ENV_NAME``` is the name of the environment.
+Installt the necessary packages using ```pip install -r resolved_requirements.txt```.
+The package ```gurobipy``` requires installation and an active license for the [GUROBI](https://www.gurobi.com/academia/academic-program-and-licenses/) solver (version 10.0.3).
 
 Contact details: ```a.stratigakos@imperial.ac.uk```.
 

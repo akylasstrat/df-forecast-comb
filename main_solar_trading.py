@@ -1037,7 +1037,7 @@ for tup in tuple_list[row_counter:]:
     else:
         with open(f'{results_path}\\{filename_prefix}_{critical_fractile}_adaptive_models_dict.pickle', 'rb') as handle:
             adaptive_models_dict = pickle.load(handle)
-            
+    
     #% Performance evaluation
     static_models = list(lambda_static_dict) 
     adaptive_models = list(adaptive_models_dict.keys())
