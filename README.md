@@ -58,7 +58,12 @@ Each script, contains a function ```params()``` that sets the experimental setup
 A few clarifying points:
 - Figure 1 is generated and stored when ```main_solar_trading.py``` runs (saved in ```\plots``` as quantile_score_solar_forecast.pdf).
 - Figure 3 is generated and stored when ```main_NEW_wind_grid_scheduling.py``` runs (saved in ```\plots``` as quantile_score_wind_forecast.pdf).
-- For the trading case study with stochastic solar production, the experiment is repeated 3 times, one for each solar plant available in the GEFCom2014 data set. To do this, run ```main_solar_trading.py``` seperately for each target solar plant by setting ```params['target_zone']``` to the respective value from ```[1,2,3]```.
+- For the trading case study with stochastic solar production, 
+the experiment is repeated multiple instances (3 solar plants and 9 optimal quantiles). 
+To reproduce the results of Table 2, set ```params['target_zone']=[2]``` and ```params['crit_quant']=[0.2]``` and run the script once. 
+To get full results (only affect Figure 2), set ```params['crit_quant'] = np.arange(0.1,1,0.1)``` (default value) 
+and run ```main_solar_trading.py``` seperately for each target solar plant by setting ```params['target_zone']``` to the respective value from ```[1,2,3]```. 
+
 - The results in .csv format provided in this repository are the ones appearing in the paper. Re-running all the experiments using the default parameters should save new .csv files with the same values as the ones provided here.
 
 
