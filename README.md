@@ -50,7 +50,9 @@ concatenated in a single file.
 ### Reproducing the Results
 
 To reproduce the results, the following steps are required:
-- **Run each experiment and store results**: To run the experiments uses the respective ```main_*.py```. Each script, contains a function ```params()``` that sets the experimental setup. By setting ```params['save'] = True``` (default value) and running the respective experiment from ```main_*.py```, new results will be stored as .csv files in the respective subfolder in ```\results```.
+- **Run each experiment and store results**: To run the experiments uses the respective ```main_*.py```. 
+For MacOS/Linux you need to update the project directory.
+Each script, contains a function ```params()``` that sets the experimental setup. By setting ```params['save'] = True``` (default value) and running the respective experiment from ```main_*.py```, new results will be stored as .csv files in the respective subfolder in ```\results```.
 - **Generating tables and figures**: Given stored .csv files in ```\results```, run the ```plot_results.py``` script to generate Tables 1-3 (printed out) and Figure 2 (saved in ```\plots``` as adaptive_reg_trad_cost_CRPS_tradeoff_softmax.pdf).
 
 A few clarifying points:
